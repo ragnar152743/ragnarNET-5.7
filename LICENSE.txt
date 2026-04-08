@@ -1,0 +1,67 @@
+Voxel RTX Game
+Proprietary Player-Use-Only License v1.0
+
+Copyright (c) 2026 Ragnar / Voxel RTX Game.
+All rights reserved.
+
+1. Scope
+
+This license applies only to the original content of this project that is owned by the Licensor, including without limitation the original source code, scripts, scenes, gameplay logic, launcher logic, UI, custom shaders, branding, save structures, security flow, and all other original project elements (the "Proprietary Content").
+
+This license does not replace, cancel, or override any separate license that applies to third-party assets, libraries, models, sounds, or textures bundled with the project.
+
+2. Limited License Grant
+
+Subject to your compliance with this license, the Licensor grants you a personal, revocable, non-exclusive, non-transferable, non-sublicensable, limited license solely to:
+
+- install the official build of the game;
+- launch the official build of the game through the official launcher when required;
+- play the game for your own private, personal use;
+- create personal save data and personal configuration files required to play.
+
+No ownership or intellectual property rights are transferred to you.
+
+3. Strict Restrictions
+
+Except where a restriction is prohibited by mandatory law, you may not, and you may not allow any third party to:
+
+- copy, mirror, republish, upload, host, distribute, resell, rent, lease, sublicense, or otherwise make the game, launcher, or Proprietary Content available to others;
+- modify, adapt, translate, patch, port, decompile, disassemble, reverse engineer, inspect, or derive source or internal logic from the Proprietary Content;
+- extract, unpack, scrape, mine, or reuse the Proprietary Content, including code, scenes, gameplay systems, UI, branding, shaders, launcher flow, security flow, packaged assets, or compiled data;
+- bypass, disable, tamper with, intercept, or interfere with the launcher, launch key, session token, update flow, or any technical protection or access control mechanism;
+- use the Proprietary Content as a base, template, sample, starter, framework, dataset, or training material for another game, launcher, application, service, or AI/ML system;
+- redistribute modified or unmodified builds, files, assets, or parts of the project;
+- use the Proprietary Content for commercial purposes of any kind;
+- claim the Proprietary Content as your own.
+
+In short: you are licensed to play the game, not to reuse or exploit the Proprietary Content.
+
+4. Ownership
+
+The Proprietary Content is licensed, not sold. The Licensor retains all right, title, and interest in and to the Proprietary Content, including all copyright, trademark, trade dress, design, and other intellectual property rights.
+
+5. Updates and Access
+
+The Licensor may modify, replace, suspend, limit, or remove builds, launcher behavior, online update flows, access conditions, or technical protections at any time, with or without notice.
+
+6. Third-Party Materials
+
+Some files bundled with the project come from third parties and remain governed by their own licenses. Those files are excluded from any claim that this document alone can convert them into closed proprietary assets.
+
+See THIRD_PARTY_NOTICES.md for additional notice information.
+
+7. Termination
+
+This license terminates automatically and immediately if you breach it. Upon termination, you must stop using the Proprietary Content and delete all copies of the game and launcher in your possession or control, to the extent permitted by applicable law.
+
+8. No Warranty
+
+THE PROPRIETARY CONTENT IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, TO THE MAXIMUM EXTENT PERMITTED BY LAW.
+
+9. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, CONSEQUENTIAL, OR OTHER DAMAGES ARISING FROM OR RELATED TO THE USE OF THE PROPRIETARY CONTENT.
+
+10. Entire License
+
+This document is the complete proprietary player-use-only license for the Proprietary Content unless the Licensor publishes a replacement version.

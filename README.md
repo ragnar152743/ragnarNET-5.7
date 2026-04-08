@@ -72,6 +72,13 @@ Godot 4 sandbox voxel moderne inspire de Minecraft RTX, avec generation infinie 
 - Voir `assets/README.md` pour les assets integres, les overrides et les sources web utilisees.
 - Voir `TEXTURE_AUDIT.md` pour l'audit complet texture/bloc et les corrections de mapping.
 
+## License
+
+- Le projet n'est pas open source.
+- Le contenu original du projet est maintenant sous licence proprietaire tres restrictive dans `LICENSE.txt`.
+- La licence accordee est limitee au simple droit d'installer, lancer et jouer.
+- Les assets tiers restent sous leurs licences d'origine. Voir `THIRD_PARTY_NOTICES.md`.
+
 ## Launcher / Updates
 
 - Le launcher Windows se trouve dans `launcher_app/VoxelRTXLauncher/`.
