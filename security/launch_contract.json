@@ -1,0 +1,10 @@
+{
+	"product_name": "Voxel RTX Game",
+	"game_executable": "VoxelRTXGame.exe",
+	"launch_key": "RAGNAR2026:773883729.8729/575.ID",
+	"launch_salt": "VoxelRTXStudio.Security.v1",
+	"error_missing_key": "GAME-AUTH-001",
+	"error_invalid_key": "GAME-AUTH-002",
+	"error_invalid_token": "GAME-AUTH-003",
+	"error_missing_nonce": "GAME-AUTH-004"
+}
