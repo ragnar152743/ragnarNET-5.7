@@ -44,7 +44,6 @@ Godot 4 sandbox voxel moderne inspire de Minecraft RTX, avec generation infinie 
 
 - `scripts/main.gd`: orchestration globale du jeu, slots de sauvegarde, chargement, autosave, monde et HUD.
 - `scripts/launch_security.gd`: validation de la cle de lancement et du jeton de session envoye par le launcher.
-- `scripts/github_updater.gd`: check GitHub Releases, telechargement d'une mise a jour Windows et preparation de l'installation au redemarrage.
 - `scripts/save_manager.gd`: lecture/ecriture des slots et metadonnees de parties.
 - `scripts/world.gd`: generation infinie, streaming progressif terrain/props, collision radius dedie, raycast interaction, spawn et variantes de blocs.
 - `scripts/voxel_chunk.gd`: mesh/collisions par chunk avec cache voxel local et fusion de boites de collision pour reduire fortement le cout physique.
@@ -83,10 +82,11 @@ Godot 4 sandbox voxel moderne inspire de Minecraft RTX, avec generation infinie 
 
 - Le launcher Windows se trouve dans `launcher_app/VoxelRTXLauncher/`.
 - Il installe `VoxelRTXGame.exe` dans `%LocalAppData%\Programs\VoxelRTX` si le jeu n'est pas encore present.
-- Il verifie le manifeste GitHub et tente une reparation ou une mise a jour avant de lancer le jeu.
+- Il verifie le feed runtime GitHub et tente une reparation ou une mise a jour avant de lancer le jeu.
 - Il demande la cle de lancement, lance `VoxelRTXGame.exe` avec la cle et un jeton de session, et le jeu refuse le demarrage si la validation echoue.
 - Le repo GitHub configure pour le flux launcher est `ragnar152743/ragnarNET-5.7`.
 - Le contrat partage est dans `security/launch_contract.json`.
-- Le manifeste GitHub versionne est dans `launcher/manifest.json`.
+- Le feed runtime versionne est dans `distribution/manifests/`.
+- Le runtime GitHub vital est range dans `distribution/game`, `distribution/launcher`, `distribution/manifests` et `distribution/legal`.
 - `tools/publish_launcher.ps1` publie le launcher dans `builds/`.
-- `tools/prepare_github_release.ps1` prepare `VoxelRTXGame.exe`, `VoxelRTXLauncher.exe` et `manifest.json` pour la prochaine release GitHub.
+- `tools/prepare_github_release.ps1` prepare les binaires runtime et les manifests pour la prochaine publication GitHub.

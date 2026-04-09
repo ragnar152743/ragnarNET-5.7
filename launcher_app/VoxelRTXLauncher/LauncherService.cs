@@ -65,6 +65,119 @@ internal sealed class LauncherService
         return null;
     }
 
+    private string? TryResolveBundledManifestPath()
+    {
+        foreach (var candidate in EnumerateBundledManifestCandidates())
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private LauncherManifest? TryLoadBundledManifest()
+    {
+        var path = TryResolveBundledManifestPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            var manifest = JsonSerializer.Deserialize<LauncherManifest>(json);
+            return NormalizeGameManifest(manifest, BuildDefaultGameManifest());
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool HasBundledMultipartFeed()
+    {
+        var manifest = TryLoadBundledManifest();
+        if (manifest?.GameParts is not { Count: > 0 })
+        {
+            return false;
+        }
+
+        foreach (var part in manifest.GameParts)
+        {
+            if (TryResolveBundledPartPath(part) is null)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private string? TryResolveBundledPartPath(LauncherDownloadPart part)
+    {
+        var fileName = ExtractPayloadFileName(part.Url);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        foreach (var candidateRoot in EnumerateBundledPartRoots())
+        {
+            var candidate = Path.Combine(candidateRoot, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private IEnumerable<string> EnumerateBundledManifestCandidates()
+    {
+        var parentDirectory = Directory.GetParent(_launcherDirectory)?.FullName;
+        yield return Path.Combine(_launcherDirectory, "manifests", "manifest.json");
+        yield return Path.Combine(_launcherDirectory, "distribution", "manifests", "manifest.json");
+
+        if (!string.IsNullOrWhiteSpace(parentDirectory))
+        {
+            yield return Path.Combine(parentDirectory, "distribution", "manifests", "manifest.json");
+        }
+    }
+
+    private IEnumerable<string> EnumerateBundledPartRoots()
+    {
+        var parentDirectory = Directory.GetParent(_launcherDirectory)?.FullName;
+        yield return Path.Combine(_launcherDirectory, "game");
+        yield return Path.Combine(_launcherDirectory, "distribution", "game");
+
+        if (!string.IsNullOrWhiteSpace(parentDirectory))
+        {
+            yield return Path.Combine(parentDirectory, "distribution", "game");
+        }
+    }
+
+    private static string ExtractPayloadFileName(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return "";
+        }
+
+        try
+        {
+            return Path.GetFileName(new Uri(url, UriKind.Absolute).AbsolutePath);
+        }
+        catch
+        {
+            return Path.GetFileName(url);
+        }
+    }
+
     private IEnumerable<string> EnumerateBundledGameCandidates()
     {
         var parentDirectory = Directory.GetParent(_launcherDirectory)?.FullName;
@@ -86,7 +199,7 @@ internal sealed class LauncherService
     public string InstalledLauncherPath => Path.Combine(_installRoot, _launcherExecutableName);
     public string ConfiguredRepository => DefaultRepo;
 
-    public bool HasBundledGame => TryResolveBundledGamePath() is not null;
+    public bool HasBundledGame => TryResolveBundledGamePath() is not null || HasBundledMultipartFeed();
 
     public bool HasInstalledGame => File.Exists(InstalledGamePath);
 
@@ -122,6 +235,7 @@ internal sealed class LauncherService
         if (!HasInstalledGame || installBroken)
         {
             var repairMode = forceRepair || (HasInstalledGame && installBroken);
+            var localBundleAvailable = HasBundledGame;
             ReportStatus(
                 progress,
                 !HasInstalledGame
@@ -129,6 +243,15 @@ internal sealed class LauncherService
                     : "Installation invalide, reparation en cours...",
                 4
             );
+
+            if (localBundleAvailable)
+            {
+                var bundleResult = await TryInstallFromBundle(progress, repairMode);
+                if (bundleResult.Success)
+                {
+                    return WithLauncherStatus(bundleResult, launcherStatus);
+                }
+            }
 
             var downloadResult = await TryInstallFromGitHubAsync(
                 gameManifest,
@@ -143,10 +266,13 @@ internal sealed class LauncherService
                 return WithLauncherStatus(downloadResult, launcherStatus);
             }
 
-            var bundleResult = await TryInstallFromBundle(progress, repairMode);
-            if (bundleResult.Success)
+            if (!localBundleAvailable)
             {
-                return WithLauncherStatus(bundleResult, launcherStatus);
+                var bundleResult = await TryInstallFromBundle(progress, repairMode);
+                if (bundleResult.Success)
+                {
+                    return WithLauncherStatus(bundleResult, launcherStatus);
+                }
             }
 
             return new EnsureInstallResult
@@ -863,10 +989,94 @@ internal sealed class LauncherService
         return new EnsureInstallResult { Success = true };
     }
 
+    private async Task<EnsureInstallResult> AssembleBundledMultipartGameAsync(
+        LauncherManifest manifest,
+        IProgress<LauncherProgressReport>? progress
+    )
+    {
+        if (manifest.GameParts is not { Count: > 0 })
+        {
+            return BuildDownloadInvalidResult(
+                "Le feed runtime local ne contient aucune partie exploitable.",
+                "LAUNCH-INSTALL-010"
+            );
+        }
+
+        EnsureInstallDirectory();
+        var tempPath = Path.Combine(_installRoot, $"{_contract.GameExecutable}.bundle");
+        if (File.Exists(tempPath))
+        {
+            File.Delete(tempPath);
+        }
+
+        long totalBytes = 0;
+        foreach (var gamePart in manifest.GameParts)
+        {
+            totalBytes += Math.Max(0, gamePart.SizeBytes);
+        }
+
+        long assembledBytes = 0;
+        try
+        {
+            await using var destination = File.Create(tempPath);
+            for (var index = 0; index < manifest.GameParts.Count; index++)
+            {
+                var part = manifest.GameParts[index];
+                var partPath = TryResolveBundledPartPath(part);
+                if (string.IsNullOrWhiteSpace(partPath))
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+
+                    return BuildDownloadInvalidResult(
+                        $"Le feed runtime local ne trouve pas la partie {index + 1}/{manifest.GameParts.Count}.",
+                        "LAUNCH-INSTALL-011"
+                    );
+                }
+
+                var partInfo = new FileInfo(partPath);
+                await using var source = File.OpenRead(partPath);
+                await CopyStreamWithProgressAsync(
+                    source,
+                    destination,
+                    partInfo.Length,
+                    copiedBytes => ReportWeightedProgress(
+                        progress,
+                        $"Assemblage du runtime local ({index + 1}/{manifest.GameParts.Count})...",
+                        assembledBytes + copiedBytes,
+                        totalBytes,
+                        8,
+                        96
+                    ),
+                    CancellationToken.None
+                );
+                assembledBytes += partInfo.Length;
+            }
+
+            ReplaceInstalledGame(tempPath);
+            return new EnsureInstallResult { Success = true };
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+
+            return BuildDownloadInvalidResult(
+                "Le feed runtime local n'a pas pu etre recompose.",
+                "LAUNCH-INSTALL-012"
+            );
+        }
+    }
+
     private async Task<EnsureInstallResult> TryInstallFromBundle(IProgress<LauncherProgressReport>? progress, bool repairMode)
     {
         var bundledGamePath = TryResolveBundledGamePath();
-        if (bundledGamePath is null)
+        var bundledManifest = TryLoadBundledManifest();
+        if (bundledGamePath is null && bundledManifest is null)
         {
             return new EnsureInstallResult
             {
@@ -880,27 +1090,42 @@ internal sealed class LauncherService
         {
             ReportStatus(progress, repairMode ? "Reparation depuis le bundle local..." : "Installation depuis le bundle local...", 8);
             Directory.CreateDirectory(_installRoot);
-            await using (var source = File.OpenRead(bundledGamePath))
-            await using (var destination = File.Create(InstalledGamePath))
+            if (bundledGamePath is not null)
             {
-                var sourceLength = source.Length;
-                await CopyStreamWithProgressAsync(
-                    source,
-                    destination,
-                    sourceLength,
-                    copiedBytes => ReportWeightedProgress(
-                        progress,
-                        repairMode ? "Reparation du build local..." : "Installation du build local...",
-                        copiedBytes,
+                await using (var source = File.OpenRead(bundledGamePath))
+                await using (var destination = File.Create(InstalledGamePath))
+                {
+                    var sourceLength = source.Length;
+                    await CopyStreamWithProgressAsync(
+                        source,
+                        destination,
                         sourceLength,
-                        8,
-                        96
-                    ),
-                    CancellationToken.None
-                );
+                        copiedBytes => ReportWeightedProgress(
+                            progress,
+                            repairMode ? "Reparation du build local..." : "Installation du build local...",
+                            copiedBytes,
+                            sourceLength,
+                            8,
+                            96
+                        ),
+                        CancellationToken.None
+                    );
+                }
+            }
+            else
+            {
+                var assembleResult = await AssembleBundledMultipartGameAsync(bundledManifest!, progress);
+                if (!assembleResult.Success)
+                {
+                    return assembleResult;
+                }
             }
 
-            var version = NormalizeVersion(Application.ProductVersion ?? "1.2.0");
+            var version = NormalizeVersion(
+                !string.IsNullOrWhiteSpace(bundledManifest?.Version)
+                    ? bundledManifest!.Version
+                    : (Application.ProductVersion ?? "1.2.0")
+            );
             var hash = ComputeSha256(InstalledGamePath);
             SaveInstallState(
                 new InstallState

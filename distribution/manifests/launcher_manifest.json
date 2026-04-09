@@ -1,8 +1,8 @@
 {
   "product_name": "Voxel RTX Launcher",
   "repository": "ragnar152743/ragnarNET-5.7",
-  "launcher_version": "1.2.3",
+  "launcher_version": "1.2.4",
   "launcher_download_url": "https://media.githubusercontent.com/media/ragnar152743/ragnarNET-5.7/main/distribution/launcher/VoxelRTXLauncher.exe",
-  "launcher_sha256": "0629cb54e163b521a528107b843dd90dba2bfb6ab18c7aefe29d8f0740732733",
-  "notes": "Manifest officiel du launcher Voxel RTX. UI plus stylisee, pourcentage de telechargement, runtime feed range et installation GitHub multi-parties."
+  "launcher_sha256": "bf6648acd87fed2f3eed72e17e12af58f6bcdaf438b996550c9029cdfeffd75d",
+  "notes": "Manifest officiel du launcher Voxel RTX. Depot nettoye, runtime feed garde seulement les fichiers vitaux, UI plus stylisee et telechargement multi-parties avec pourcentage."
 }
