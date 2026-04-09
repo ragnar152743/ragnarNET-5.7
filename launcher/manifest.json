@@ -1,7 +1,7 @@
 {
   "product_name": "Voxel RTX Game",
   "repository": "ragnar152743/ragnarNET-5.7",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "game_download_url": "https://github.com/ragnar152743/ragnarNET-5.7/releases/latest/download/VoxelRTXGame.exe",
   "launcher_download_url": "https://github.com/ragnar152743/ragnarNET-5.7/releases/latest/download/VoxelRTXLauncher.exe",
   "game_sha256": "",
