@@ -7,10 +7,11 @@ namespace VoxelRTXLauncher;
 internal sealed class LauncherService
 {
     private const string DefaultRepo = "ragnar152743/ragnarNET-5.7";
-    private const string GameManifestUrlTemplate = "https://raw.githubusercontent.com/{0}/main/launcher/manifest.json";
-    private const string LauncherManifestUrlTemplate = "https://raw.githubusercontent.com/{0}/main/launcher/launcher_manifest.json";
+    private const string GameManifestUrlTemplate = "https://raw.githubusercontent.com/{0}/main/distribution/manifests/manifest.json";
+    private const string LauncherManifestUrlTemplate = "https://raw.githubusercontent.com/{0}/main/distribution/manifests/launcher_manifest.json";
     private const long DefaultMinimumHealthyGameSizeBytes = 100L * 1024L * 1024L;
     private const long MinimumHealthyLauncherSizeBytes = 5L * 1024L * 1024L;
+    private const int CopyBufferSize = 1024 * 1024;
 
     private static readonly HttpClient HttpClient = BuildHttpClient();
 
@@ -70,10 +71,12 @@ internal sealed class LauncherService
         yield return Path.Combine(_launcherDirectory, _contract.GameExecutable);
         yield return Path.Combine(_launcherDirectory, "release", _contract.GameExecutable);
         yield return Path.Combine(_launcherDirectory, "distribution", _contract.GameExecutable);
+        yield return Path.Combine(_launcherDirectory, "game", _contract.GameExecutable);
 
         if (!string.IsNullOrWhiteSpace(parentDirectory))
         {
             yield return Path.Combine(parentDirectory, "distribution", _contract.GameExecutable);
+            yield return Path.Combine(parentDirectory, "distribution", "game", _contract.GameExecutable);
             yield return Path.Combine(parentDirectory, "builds", _contract.GameExecutable);
             yield return Path.Combine(parentDirectory, "builds", "release", _contract.GameExecutable);
         }
@@ -87,13 +90,25 @@ internal sealed class LauncherService
 
     public bool HasInstalledGame => File.Exists(InstalledGamePath);
 
+    private static void ReportStatus(IProgress<LauncherProgressReport>? progress, string message, double? percent = null)
+    {
+        if (progress is null)
+        {
+            return;
+        }
+
+        progress.Report(percent.HasValue
+            ? LauncherProgressReport.Progress(message, percent.Value)
+            : LauncherProgressReport.Status(message));
+    }
+
     public async Task<EnsureInstallResult> EnsureGameReadyAsync(
-        IProgress<string>? progress = null,
+        IProgress<LauncherProgressReport>? progress = null,
         CancellationToken cancellationToken = default,
         bool forceRepair = false
     )
     {
-        progress?.Report("Verification de l'installation...");
+        ReportStatus(progress, "Verification de l'installation...");
         Directory.CreateDirectory(_installRoot);
         EnsureLauncherInstalled();
 
@@ -107,10 +122,12 @@ internal sealed class LauncherService
         if (!HasInstalledGame || installBroken)
         {
             var repairMode = forceRepair || (HasInstalledGame && installBroken);
-            progress?.Report(
+            ReportStatus(
+                progress,
                 !HasInstalledGame
                     ? "Jeu absent, installation en cours..."
-                    : "Installation invalide, reparation en cours..."
+                    : "Installation invalide, reparation en cours...",
+                4
             );
 
             var downloadResult = await TryInstallFromGitHubAsync(
@@ -126,7 +143,7 @@ internal sealed class LauncherService
                 return WithLauncherStatus(downloadResult, launcherStatus);
             }
 
-            var bundleResult = TryInstallFromBundle(progress, repairMode);
+            var bundleResult = await TryInstallFromBundle(progress, repairMode);
             if (bundleResult.Success)
             {
                 return WithLauncherStatus(bundleResult, launcherStatus);
@@ -144,7 +161,7 @@ internal sealed class LauncherService
         var manifestVersion = NormalizeVersion(gameManifest.Version);
         if (IsVersionNewer(manifestVersion, installedVersion))
         {
-            progress?.Report($"Nouvelle version {manifestVersion} detectee, mise a jour...");
+            ReportStatus(progress, $"Nouvelle version {manifestVersion} detectee, mise a jour...", 4);
             var updateResult = await TryInstallFromGitHubAsync(
                 gameManifest,
                 minimumGameSizeBytes,
@@ -158,7 +175,7 @@ internal sealed class LauncherService
             }
         }
 
-        progress?.Report("Installation prete.");
+        ReportStatus(progress, "Installation prete.", 100);
         return new EnsureInstallResult
         {
             Success = true,
@@ -226,8 +243,8 @@ internal sealed class LauncherService
             ProductName = "Voxel RTX Game",
             Repository = DefaultRepo,
             Version = currentVersion,
-            GameDownloadUrl = $"https://github.com/{DefaultRepo}/releases/latest/download/{_contract.GameExecutable}",
-            LauncherDownloadUrl = $"https://github.com/{DefaultRepo}/releases/latest/download/VoxelRTXLauncher.exe",
+            GameDownloadUrl = $"https://media.githubusercontent.com/media/{DefaultRepo}/main/distribution/game/{_contract.GameExecutable}",
+            LauncherDownloadUrl = $"https://media.githubusercontent.com/media/{DefaultRepo}/main/distribution/launcher/VoxelRTXLauncher.exe",
             MinimumGameSizeBytes = DefaultMinimumHealthyGameSizeBytes,
             Notes = "Manifest officiel du jeu.",
         };
@@ -240,7 +257,7 @@ internal sealed class LauncherService
             ProductName = "Voxel RTX Launcher",
             Repository = DefaultRepo,
             LauncherVersion = NormalizeVersion(Application.ProductVersion ?? "1.2.0"),
-            LauncherDownloadUrl = $"https://github.com/{DefaultRepo}/releases/latest/download/VoxelRTXLauncher.exe",
+            LauncherDownloadUrl = $"https://media.githubusercontent.com/media/{DefaultRepo}/main/distribution/launcher/VoxelRTXLauncher.exe",
             Notes = "Manifest officiel du launcher.",
         };
     }
@@ -359,7 +376,7 @@ internal sealed class LauncherService
 
     private async Task<string> TryRefreshInstalledLauncherAsync(
         LauncherSelfManifest manifest,
-        IProgress<string>? progress,
+        IProgress<LauncherProgressReport>? progress,
         CancellationToken cancellationToken
     )
     {
@@ -387,7 +404,7 @@ internal sealed class LauncherService
         var tempPath = Path.Combine(_installRoot, $"{_launcherExecutableName}.download");
         try
         {
-            progress?.Report($"Verification du launcher {manifestVersion}...");
+            ReportStatus(progress, $"Verification du launcher {manifestVersion}...", 2);
             using var response = await HttpClient.GetAsync(
                 manifest.LauncherDownloadUrl,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -401,7 +418,21 @@ internal sealed class LauncherService
             await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
             await using (var destination = File.Create(tempPath))
             {
-                await source.CopyToAsync(destination, cancellationToken);
+                var expectedBytes = response.Content.Headers.ContentLength ?? 0;
+                await CopyStreamWithProgressAsync(
+                    source,
+                    destination,
+                    expectedBytes,
+                    copiedBytes => ReportWeightedProgress(
+                        progress,
+                        $"Verification du launcher {manifestVersion}...",
+                        copiedBytes,
+                        expectedBytes,
+                        2,
+                        8
+                    ),
+                    cancellationToken
+                );
             }
 
             var fileInfo = new FileInfo(tempPath);
@@ -438,7 +469,7 @@ internal sealed class LauncherService
     private async Task<EnsureInstallResult> TryInstallFromGitHubAsync(
         LauncherManifest manifest,
         long minimumGameSizeBytes,
-        IProgress<string>? progress,
+        IProgress<LauncherProgressReport>? progress,
         CancellationToken cancellationToken,
         bool updateMode = false,
         bool repairMode = false
@@ -458,10 +489,12 @@ internal sealed class LauncherService
         var tempPath = Path.Combine(_installRoot, $"{_contract.GameExecutable}.download");
         try
         {
-            progress?.Report(
+            ReportStatus(
+                progress,
                 updateMode
                     ? "Telechargement de la mise a jour GitHub..."
-                    : "Telechargement du jeu depuis GitHub..."
+                    : "Telechargement du jeu depuis GitHub...",
+                0
             );
             EnsureInstallDirectory();
 
@@ -471,15 +504,16 @@ internal sealed class LauncherService
                 downloadResult = await DownloadMultipartGameAsync(
                     manifest,
                     tempPath,
-                    progress,
-                    cancellationToken
-                );
+                progress,
+                cancellationToken
+            );
             }
             else
             {
                 downloadResult = await DownloadSingleFileGameAsync(
                     manifest,
                     tempPath,
+                    progress,
                     cancellationToken
                 );
             }
@@ -500,6 +534,7 @@ internal sealed class LauncherService
                 return downloadResult;
             }
 
+            ReportStatus(progress, "Verification de l'integrite du build...", 96);
             var downloadedInfo = new FileInfo(tempPath);
             if (!downloadedInfo.Exists || downloadedInfo.Length < minimumGameSizeBytes)
             {
@@ -528,6 +563,7 @@ internal sealed class LauncherService
             }
 
             ReplaceInstalledGame(tempPath);
+            ReportStatus(progress, "Installation du build final...", 99);
             var version = NormalizeVersion(manifest.Version);
             var installedHashValue = string.IsNullOrWhiteSpace(manifest.GameSha256)
                 ? await ComputeSha256Async(InstalledGamePath, cancellationToken)
@@ -610,9 +646,63 @@ internal sealed class LauncherService
         Directory.CreateDirectory(_installRoot);
     }
 
+    private static async Task CopyStreamWithProgressAsync(
+        Stream source,
+        Stream destination,
+        long expectedBytes,
+        Action<long>? onBytesCopied,
+        CancellationToken cancellationToken
+    )
+    {
+        var buffer = new byte[CopyBufferSize];
+        long totalBytesCopied = 0;
+        long nextReportThreshold = CopyBufferSize * 4L;
+
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            totalBytesCopied += read;
+
+            if (totalBytesCopied >= nextReportThreshold || (expectedBytes > 0 && totalBytesCopied >= expectedBytes))
+            {
+                onBytesCopied?.Invoke(totalBytesCopied);
+                nextReportThreshold = totalBytesCopied + CopyBufferSize * 4L;
+            }
+        }
+
+        onBytesCopied?.Invoke(totalBytesCopied);
+    }
+
+    private static void ReportWeightedProgress(
+        IProgress<LauncherProgressReport>? progress,
+        string message,
+        long completedBytes,
+        long totalBytes,
+        double startPercent,
+        double endPercent
+    )
+    {
+        if (totalBytes <= 0)
+        {
+            ReportStatus(progress, message, startPercent);
+            return;
+        }
+
+        var ratio = Math.Clamp((double)completedBytes / totalBytes, 0d, 1d);
+        var percent = startPercent + ((endPercent - startPercent) * ratio);
+        ReportStatus(progress, message, percent);
+    }
+
     private async Task<EnsureInstallResult> DownloadSingleFileGameAsync(
         LauncherManifest manifest,
         string destinationPath,
+        IProgress<LauncherProgressReport>? progress,
         CancellationToken cancellationToken
     )
     {
@@ -629,7 +719,21 @@ internal sealed class LauncherService
         await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
         await using (var destination = File.Create(destinationPath))
         {
-            await source.CopyToAsync(destination, cancellationToken);
+            var expectedBytes = response.Content.Headers.ContentLength ?? 0;
+            await CopyStreamWithProgressAsync(
+                source,
+                destination,
+                expectedBytes,
+                copiedBytes => ReportWeightedProgress(
+                    progress,
+                    "Telechargement du build jeu...",
+                    copiedBytes,
+                    expectedBytes,
+                    5,
+                    95
+                ),
+                cancellationToken
+            );
         }
 
         return new EnsureInstallResult { Success = true };
@@ -638,12 +742,17 @@ internal sealed class LauncherService
     private async Task<EnsureInstallResult> DownloadMultipartGameAsync(
         LauncherManifest manifest,
         string destinationPath,
-        IProgress<string>? progress,
+        IProgress<LauncherProgressReport>? progress,
         CancellationToken cancellationToken
     )
     {
         var partDirectory = Path.Combine(_installRoot, "download_parts");
         Directory.CreateDirectory(partDirectory);
+        long totalBytes = 0;
+        foreach (var gamePart in manifest.GameParts)
+        {
+            totalBytes += Math.Max(0, gamePart.SizeBytes);
+        }
 
         if (File.Exists(destinationPath))
         {
@@ -651,6 +760,8 @@ internal sealed class LauncherService
         }
 
         await using var destination = File.Create(destinationPath);
+        long downloadedBytes = 0;
+        long assembledBytes = 0;
         for (var index = 0; index < manifest.GameParts.Count; index++)
         {
             var part = manifest.GameParts[index];
@@ -662,7 +773,7 @@ internal sealed class LauncherService
                 );
             }
 
-            progress?.Report($"Telechargement du jeu ({index + 1}/{manifest.GameParts.Count})...");
+            ReportStatus(progress, $"Telechargement du jeu ({index + 1}/{manifest.GameParts.Count})...", 5);
             using var response = await HttpClient.GetAsync(
                 part.Url,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -682,7 +793,21 @@ internal sealed class LauncherService
             await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
             await using (var partDestination = File.Create(partPath))
             {
-                await source.CopyToAsync(partDestination, cancellationToken);
+                var partBytes = part.SizeBytes > 0 ? part.SizeBytes : (response.Content.Headers.ContentLength ?? 0);
+                await CopyStreamWithProgressAsync(
+                    source,
+                    partDestination,
+                    partBytes,
+                    copiedBytes => ReportWeightedProgress(
+                        progress,
+                        $"Telechargement du jeu ({index + 1}/{manifest.GameParts.Count})...",
+                        downloadedBytes + copiedBytes,
+                        totalBytes,
+                        5,
+                        88
+                    ),
+                    cancellationToken
+                );
             }
 
             var partInfo = new FileInfo(partPath);
@@ -709,9 +834,24 @@ internal sealed class LauncherService
 
             await using (var partSource = File.OpenRead(partPath))
             {
-                await partSource.CopyToAsync(destination, cancellationToken);
+                await CopyStreamWithProgressAsync(
+                    partSource,
+                    destination,
+                    partInfo.Length,
+                    copiedBytes => ReportWeightedProgress(
+                        progress,
+                        $"Assemblage du build ({index + 1}/{manifest.GameParts.Count})...",
+                        assembledBytes + copiedBytes,
+                        totalBytes,
+                        88,
+                        96
+                    ),
+                    cancellationToken
+                );
             }
 
+            downloadedBytes += partInfo.Length;
+            assembledBytes += partInfo.Length;
             File.Delete(partPath);
         }
 
@@ -723,7 +863,7 @@ internal sealed class LauncherService
         return new EnsureInstallResult { Success = true };
     }
 
-    private EnsureInstallResult TryInstallFromBundle(IProgress<string>? progress, bool repairMode)
+    private async Task<EnsureInstallResult> TryInstallFromBundle(IProgress<LauncherProgressReport>? progress, bool repairMode)
     {
         var bundledGamePath = TryResolveBundledGamePath();
         if (bundledGamePath is null)
@@ -738,9 +878,27 @@ internal sealed class LauncherService
 
         try
         {
-            progress?.Report(repairMode ? "Reparation depuis le bundle local..." : "Installation depuis le bundle local...");
+            ReportStatus(progress, repairMode ? "Reparation depuis le bundle local..." : "Installation depuis le bundle local...", 8);
             Directory.CreateDirectory(_installRoot);
-            File.Copy(bundledGamePath, InstalledGamePath, true);
+            await using (var source = File.OpenRead(bundledGamePath))
+            await using (var destination = File.Create(InstalledGamePath))
+            {
+                var sourceLength = source.Length;
+                await CopyStreamWithProgressAsync(
+                    source,
+                    destination,
+                    sourceLength,
+                    copiedBytes => ReportWeightedProgress(
+                        progress,
+                        repairMode ? "Reparation du build local..." : "Installation du build local...",
+                        copiedBytes,
+                        sourceLength,
+                        8,
+                        96
+                    ),
+                    CancellationToken.None
+                );
+            }
 
             var version = NormalizeVersion(Application.ProductVersion ?? "1.2.0");
             var hash = ComputeSha256(InstalledGamePath);

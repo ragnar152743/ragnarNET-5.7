@@ -293,6 +293,7 @@ internal sealed class LauncherActivityBar : Control
     private readonly System.Windows.Forms.Timer _timer;
     private int _offset;
     private bool _active;
+    private double? _progressPercent;
 
     [Browsable(false)]
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -302,7 +303,20 @@ internal sealed class LauncherActivityBar : Control
         set
         {
             _active = value;
-            _timer.Enabled = value;
+            _timer.Enabled = value && !_progressPercent.HasValue;
+            Invalidate();
+        }
+    }
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public double? ProgressPercent
+    {
+        get => _progressPercent;
+        set
+        {
+            _progressPercent = value.HasValue ? Math.Clamp(value.Value, 0d, 100d) : null;
+            _timer.Enabled = _active && !_progressPercent.HasValue;
             Invalidate();
         }
     }
@@ -336,6 +350,33 @@ internal sealed class LauncherActivityBar : Control
         using var border = new Pen(Color.FromArgb(66, 95, 124), 1f);
         e.Graphics.FillPath(track, path);
         e.Graphics.DrawPath(border, path);
+
+        if (_active && _progressPercent.HasValue)
+        {
+            var innerWidth = Math.Max(2, bounds.Width - 2);
+            var fillWidth = Math.Max(12, (int)Math.Round(innerWidth * (_progressPercent.Value / 100d)));
+            var fillRect = new Rectangle(1, 1, Math.Min(innerWidth, fillWidth), Math.Max(2, bounds.Height - 2));
+            using var fillBrush = new LinearGradientBrush(
+                fillRect,
+                Color.FromArgb(82, 212, 255),
+                Color.FromArgb(57, 118, 255),
+                LinearGradientMode.Horizontal
+            );
+            using var fillPath = LauncherDrawing.CreateRoundedPath(fillRect, Math.Min(6, fillRect.Height / 2));
+            e.Graphics.FillPath(fillBrush, fillPath);
+
+            var highlightWidth = Math.Max(18, fillRect.Width / 4);
+            var highlightRect = new Rectangle(Math.Max(1, fillRect.Right - highlightWidth), 1, highlightWidth, Math.Max(2, bounds.Height - 2));
+            using var highlightBrush = new LinearGradientBrush(
+                highlightRect,
+                Color.FromArgb(22, 255, 255, 255),
+                Color.FromArgb(120, 255, 255, 255),
+                LinearGradientMode.Horizontal
+            );
+            using var highlightPath = LauncherDrawing.CreateRoundedPath(highlightRect, Math.Min(6, highlightRect.Height / 2));
+            e.Graphics.FillPath(highlightBrush, highlightPath);
+            return;
+        }
 
         if (!_active)
         {

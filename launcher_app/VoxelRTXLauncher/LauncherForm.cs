@@ -24,6 +24,7 @@ internal sealed class LauncherForm : Form
     private Label _statusLabel = null!;
     private Label _installationLabel = null!;
     private Label _footerLabel = null!;
+    private Label _progressLabel = null!;
     private LauncherBadge _stateBadge = null!;
     private LauncherBadge _installBadge = null!;
     private LauncherBadge _repoBadge = null!;
@@ -58,8 +59,8 @@ internal sealed class LauncherForm : Form
         FormBorderStyle = FormBorderStyle.None;
         MaximizeBox = false;
         MinimizeBox = true;
-        ClientSize = new Size(980, 620);
-        MinimumSize = new Size(900, 560);
+        ClientSize = new Size(1024, 648);
+        MinimumSize = new Size(940, 584);
         BackColor = WindowBack;
         Font = new Font("Segoe UI", 10.2f, FontStyle.Regular, GraphicsUnit.Point);
         Padding = new Padding(14);
@@ -194,7 +195,7 @@ internal sealed class LauncherForm : Form
 
         var heroEyebrow = new LauncherBadge
         {
-            Text = "DESKTOP SECURE CLIENT",
+            Text = "SECURE RUNTIME FEED",
             FillColor = Color.FromArgb(28, 56, 88),
             BorderColor = Color.FromArgb(84, 129, 186),
             BadgeTextColor = TextPrimary,
@@ -207,7 +208,7 @@ internal sealed class LauncherForm : Form
         {
             AutoSize = false,
             Size = new Size(456, 122),
-            Text = "Un seul launcher.\r\nUn lancement propre.",
+            Text = "Runtime propre.\r\nPatch propre.",
             Font = new Font("Segoe UI Semibold", 28f, FontStyle.Bold, GraphicsUnit.Point),
             ForeColor = TextPrimary,
             TextAlign = ContentAlignment.MiddleLeft,
@@ -220,7 +221,7 @@ internal sealed class LauncherForm : Form
         {
             AutoSize = false,
             Size = new Size(468, 88),
-            Text = "Le nouveau launcher ferme les anciennes instances, controle l'installation, repare si besoin et demarre le jeu avec le handshake securise sans friction.",
+            Text = "Le launcher gere l'installation locale, la reparation, le feed GitHub multi-parties et le demarrage securise sans laisser de flux brouillon cote jeu.",
             Font = new Font("Segoe UI", 11.2f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = Color.FromArgb(221, 234, 249),
             TextAlign = ContentAlignment.TopLeft,
@@ -265,7 +266,7 @@ internal sealed class LauncherForm : Form
         heroBadges.Controls.Add(
             new LauncherBadge
             {
-                Text = "GITHUB SYNC",
+                Text = "RUNTIME FEED",
                 FillColor = Color.FromArgb(24, 45, 63),
                 BorderColor = Color.FromArgb(85, 118, 162),
                 BadgeTextColor = TextPrimary,
@@ -289,7 +290,7 @@ internal sealed class LauncherForm : Form
         heroMetrics.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         heroStack.Controls.Add(heroMetrics);
         heroMetrics.Controls.Add(CreateMetricLabel("Install target", "%LocalAppData%\\Programs\\VoxelRTX"), 0, 0);
-        heroMetrics.Controls.Add(CreateMetricLabel("Remote source", _launcherService.ConfiguredRepository), 0, 1);
+        heroMetrics.Controls.Add(CreateMetricLabel("Remote feed", "distribution/game + launcher + manifests"), 0, 1);
         heroMetrics.Controls.Add(CreateMetricLabel("Launch contract", "Secure key + nonce + token"), 0, 2);
 
         var statusPanel = new LauncherChromePanel
@@ -316,8 +317,8 @@ internal sealed class LauncherForm : Form
         statusStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         statusStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         statusStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        statusStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         statusStack.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        statusStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         statusStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         statusStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         statusPanel.Controls.Add(statusStack);
@@ -348,7 +349,7 @@ internal sealed class LauncherForm : Form
         _statusLabel = new Label
         {
             AutoSize = false,
-            Height = 114,
+            Height = 92,
             Dock = DockStyle.Top,
             Text = "Pret.",
             Font = new Font("Segoe UI", 10.8f, FontStyle.Regular, GraphicsUnit.Point),
@@ -432,10 +433,23 @@ internal sealed class LauncherForm : Form
         _activityBar = new LauncherActivityBar
         {
             Dock = DockStyle.Top,
-            Height = 12,
-            Margin = new Padding(0, 0, 0, 18),
+            Height = 14,
+            Margin = new Padding(0, 0, 0, 8),
         };
         statusStack.Controls.Add(_activityBar, 0, 6);
+
+        _progressLabel = new Label
+        {
+            AutoSize = false,
+            Height = 22,
+            Dock = DockStyle.Top,
+            Text = "Standby",
+            Font = new Font("Segoe UI Semibold", 9.8f, FontStyle.Bold, GraphicsUnit.Point),
+            ForeColor = Color.FromArgb(205, 231, 255),
+            TextAlign = ContentAlignment.MiddleRight,
+            Margin = new Padding(0, 0, 0, 16),
+        };
+        statusStack.Controls.Add(_progressLabel, 0, 7);
 
         var buttonHost = new Panel
         {
@@ -444,7 +458,7 @@ internal sealed class LauncherForm : Form
             BackColor = Color.Transparent,
             Margin = Padding.Empty,
         };
-        statusStack.Controls.Add(buttonHost, 0, 7);
+        statusStack.Controls.Add(buttonHost, 0, 8);
 
         _playButton = new LauncherAccentButton
         {
@@ -490,7 +504,7 @@ internal sealed class LauncherForm : Form
 
         try
         {
-            IProgress<string> progress = new Progress<string>(message => SetStatus(message, false));
+            IProgress<LauncherProgressReport> progress = new Progress<LauncherProgressReport>(ApplyProgress);
             var result = await _launcherService.EnsureGameReadyAsync(progress);
             if (!result.Success)
             {
@@ -509,7 +523,7 @@ internal sealed class LauncherForm : Form
                 return;
             }
 
-            progress.Report("Le jeu est retombe trop vite, reparation forcee...");
+            progress.Report(LauncherProgressReport.Status("Le jeu est retombe trop vite, reparation forcee..."));
             var repairResult = await _launcherService.EnsureGameReadyAsync(progress, forceRepair: true);
             if (!repairResult.Success)
             {
@@ -538,7 +552,7 @@ internal sealed class LauncherForm : Form
 
     private async Task<(bool Success, string ErrorCode, string Detail)> TryLaunchInstalledGameAsync(
         string gamePath,
-        IProgress<string>? progress
+        IProgress<LauncherProgressReport>? progress
     )
     {
         if (!File.Exists(gamePath))
@@ -570,7 +584,7 @@ internal sealed class LauncherForm : Form
                 return (false, "LAUNCH-GAME-500", "Le processus du jeu n'a pas pu demarrer.");
             }
 
-            progress?.Report("Verification du demarrage reel du jeu...");
+            progress?.Report(LauncherProgressReport.Progress("Verification du demarrage reel du jeu...", 100));
             for (var probe = 0; probe < StableLaunchProbeCount; probe++)
             {
                 await Task.Delay(StableLaunchProbeDelayMs);
@@ -605,6 +619,8 @@ internal sealed class LauncherForm : Form
             _installationLabel.Text = "Installation detectee dans AppData. Le launcher va verifier les manifests puis envoyer la cle securisee au jeu au moment du demarrage.";
             _footerLabel.Text = "Une seule fenetre launcher reste autorisee. Toute ancienne instance est fermee avant affichage.";
             SetStatus("Installation detectee. Verification des manifests et lancement securise a l'appui.", false);
+            _progressLabel.Text = "Local ready";
+            _activityBar.ProgressPercent = null;
             _playButton.Enabled = true;
             return;
         }
@@ -618,6 +634,8 @@ internal sealed class LauncherForm : Form
             _installationLabel.Text = "Jeu non installe. Le launcher peut copier le build embarque dans AppData ou reparer l'installation si elle est endommagee.";
             _footerLabel.Text = "Le launcher priorise la stabilite: verifier, installer, reparer, puis seulement lancer.";
             SetStatus("Jeu non installe. Clique sur Jouer pour installer le build local dans AppData.", false);
+            _progressLabel.Text = "Bundle detecte";
+            _activityBar.ProgressPercent = null;
             _playButton.Enabled = true;
             return;
         }
@@ -629,6 +647,8 @@ internal sealed class LauncherForm : Form
         _installationLabel.Text = "Aucun build local detecte. Le launcher va s'appuyer sur GitHub pour tenter une installation propre avant lancement.";
         _footerLabel.Text = "Si le jeu tombe au demarrage, le launcher force une reinstallation puis relance une seconde tentative.";
         SetStatus("Jeu non detecte localement. Clique sur Jouer pour tenter une installation via GitHub.", false);
+        _progressLabel.Text = "Remote sync";
+        _activityBar.ProgressPercent = null;
         _playButton.Enabled = true;
     }
 
@@ -637,6 +657,22 @@ internal sealed class LauncherForm : Form
         _statusTitleLabel.Text = isError ? "Erreur de lancement" : (_busy ? "Verification en cours" : _defaultStatusTitle);
         _statusLabel.Text = message;
         _statusLabel.ForeColor = isError ? ErrorColor : TextMuted;
+    }
+
+    private void ApplyProgress(LauncherProgressReport progress)
+    {
+        SetStatus(progress.Message, false);
+        if (progress.Percent.HasValue)
+        {
+            var percent = Math.Clamp(progress.Percent.Value, 0d, 100d);
+            _activityBar.ProgressPercent = percent;
+            _progressLabel.Text = $"{percent:0.0}%";
+        }
+        else
+        {
+            _activityBar.ProgressPercent = null;
+            _progressLabel.Text = "Syncing";
+        }
     }
 
     private void ShowError(string code, string detail)
@@ -683,6 +719,7 @@ internal sealed class LauncherForm : Form
         }
 
         _activityBar.Active = false;
+        _activityBar.ProgressPercent = null;
         _playButton.Enabled = true;
         _playButton.Text = "Jouer";
         if (_statusLabel.ForeColor != ErrorColor)
