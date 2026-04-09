@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace VoxelRTXLauncher;
@@ -21,6 +22,9 @@ internal sealed class LauncherManifest
 
     [JsonPropertyName("game_sha256")]
     public string GameSha256 { get; set; } = "";
+
+    [JsonPropertyName("game_parts")]
+    public List<LauncherDownloadPart> GameParts { get; set; } = [];
 
     [JsonPropertyName("minimum_game_size_bytes")]
     public long MinimumGameSizeBytes { get; set; }

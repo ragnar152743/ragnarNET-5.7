@@ -2,9 +2,26 @@
   "product_name": "Voxel RTX Game",
   "repository": "ragnar152743/ragnarNET-5.7",
   "version": "1.2.5",
-  "game_download_url": "https://github.com/ragnar152743/ragnarNET-5.7/releases/latest/download/VoxelRTXGame.exe",
-  "launcher_download_url": "https://github.com/ragnar152743/ragnarNET-5.7/releases/latest/download/VoxelRTXLauncher.exe",
-  "game_sha256": "c0535e3b8825d80772fde8b9e7d8e5060aa421b42d1dbd91ea3d1d25135b0a70",
-  "minimum_game_size_bytes": 104857600,
-  "notes": "Manifest officiel du jeu Voxel RTX. Monde ameliore, LAN et launcher renforce."
+  "game_download_url": "",
+  "game_parts": [
+    {
+      "url": "https://media.githubusercontent.com/media/ragnar152743/ragnarNET-5.7/main/distribution/VoxelRTXGame.001.bin",
+      "sha256": "08a1c0409e105b8d44abbf0c368da8bf2b8e73a9b360169417039d8899f843bf",
+      "size_bytes": 1572864000
+    },
+    {
+      "url": "https://media.githubusercontent.com/media/ragnar152743/ragnarNET-5.7/main/distribution/VoxelRTXGame.002.bin",
+      "sha256": "67391e51185dc8bb1836077cd2567d20fb68eee4d2db24dcc2fbd3741c8f7717",
+      "size_bytes": 1572864000
+    },
+    {
+      "url": "https://media.githubusercontent.com/media/ragnar152743/ragnarNET-5.7/main/distribution/VoxelRTXGame.003.bin",
+      "sha256": "4033bb6f2629369f2cd8f7fcae95c4e3d84d7a549797b20336af81268539905f",
+      "size_bytes": 767244072
+    }
+  ],
+  "launcher_download_url": "https://media.githubusercontent.com/media/ragnar152743/ragnarNET-5.7/main/distribution/VoxelRTXLauncher.exe",
+  "game_sha256": "d4e9063e62e6c99cd4b7ff5a7f245f7a62336b8ca83dcbe65f2f9a1f58964cf1",
+  "minimum_game_size_bytes": 3912972072,
+  "notes": "Manifest officiel du jeu Voxel RTX. Monde ameliore, LAN et launcher renforce. Le build jeu est distribue en plusieurs parties pour une installation GitHub fiable."
 }

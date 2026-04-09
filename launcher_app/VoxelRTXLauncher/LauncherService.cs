@@ -18,7 +18,6 @@ internal sealed class LauncherService
     private readonly string _launcherDirectory;
     private readonly string _currentLauncherPath;
     private readonly string _launcherExecutableName;
-    private readonly string _bundledGamePath;
     private readonly string _installRoot;
     private readonly string _installStatePath;
 
@@ -33,7 +32,6 @@ internal sealed class LauncherService
             _launcherExecutableName = "VoxelRTXLauncher.exe";
         }
 
-        _bundledGamePath = Path.Combine(_launcherDirectory, _contract.GameExecutable);
         _installRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
@@ -42,17 +40,50 @@ internal sealed class LauncherService
         _installStatePath = Path.Combine(_installRoot, "install_state.json");
     }
 
+    private string? TryResolveBundledGamePath()
+    {
+        foreach (var candidate in EnumerateBundledGameCandidates())
+        {
+            if (string.IsNullOrWhiteSpace(candidate) || !File.Exists(candidate))
+            {
+                continue;
+            }
+
+            if (string.Equals(
+                Path.GetFullPath(candidate),
+                Path.GetFullPath(InstalledGamePath),
+                StringComparison.OrdinalIgnoreCase
+            ))
+            {
+                continue;
+            }
+
+            return candidate;
+        }
+
+        return null;
+    }
+
+    private IEnumerable<string> EnumerateBundledGameCandidates()
+    {
+        var parentDirectory = Directory.GetParent(_launcherDirectory)?.FullName;
+        yield return Path.Combine(_launcherDirectory, _contract.GameExecutable);
+        yield return Path.Combine(_launcherDirectory, "release", _contract.GameExecutable);
+        yield return Path.Combine(_launcherDirectory, "distribution", _contract.GameExecutable);
+
+        if (!string.IsNullOrWhiteSpace(parentDirectory))
+        {
+            yield return Path.Combine(parentDirectory, "distribution", _contract.GameExecutable);
+            yield return Path.Combine(parentDirectory, "builds", _contract.GameExecutable);
+            yield return Path.Combine(parentDirectory, "builds", "release", _contract.GameExecutable);
+        }
+    }
+
     public string InstalledGamePath => Path.Combine(_installRoot, _contract.GameExecutable);
     public string InstalledLauncherPath => Path.Combine(_installRoot, _launcherExecutableName);
     public string ConfiguredRepository => DefaultRepo;
 
-    public bool HasBundledGame =>
-        File.Exists(_bundledGamePath)
-        && !string.Equals(
-            Path.GetFullPath(_bundledGamePath),
-            Path.GetFullPath(InstalledGamePath),
-            StringComparison.OrdinalIgnoreCase
-        );
+    public bool HasBundledGame => TryResolveBundledGamePath() is not null;
 
     public bool HasInstalledGame => File.Exists(InstalledGamePath);
 
@@ -232,7 +263,9 @@ internal sealed class LauncherService
             normalized.Version = fallback.Version;
         }
 
-        if (string.IsNullOrWhiteSpace(normalized.GameDownloadUrl))
+        normalized.GameParts ??= [];
+
+        if (string.IsNullOrWhiteSpace(normalized.GameDownloadUrl) && normalized.GameParts.Count == 0)
         {
             normalized.GameDownloadUrl = fallback.GameDownloadUrl;
         }
@@ -411,7 +444,8 @@ internal sealed class LauncherService
         bool repairMode = false
     )
     {
-        if (string.IsNullOrWhiteSpace(manifest.GameDownloadUrl))
+        var hasMultipartPayload = manifest.GameParts is { Count: > 0 };
+        if (!hasMultipartPayload && string.IsNullOrWhiteSpace(manifest.GameDownloadUrl))
         {
             return new EnsureInstallResult
             {
@@ -424,27 +458,46 @@ internal sealed class LauncherService
         var tempPath = Path.Combine(_installRoot, $"{_contract.GameExecutable}.download");
         try
         {
-            progress?.Report(updateMode ? "Telechargement de la mise a jour GitHub..." : "Telechargement du jeu depuis GitHub...");
-            using var response = await HttpClient.GetAsync(
-                manifest.GameDownloadUrl,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken
+            progress?.Report(
+                updateMode
+                    ? "Telechargement de la mise a jour GitHub..."
+                    : "Telechargement du jeu depuis GitHub..."
             );
+            EnsureInstallDirectory();
 
-            if (!response.IsSuccessStatusCode)
+            EnsureInstallResult downloadResult;
+            if (hasMultipartPayload)
             {
-                return new EnsureInstallResult
-                {
-                    Success = false,
-                    ErrorCode = "LAUNCH-INSTALL-002",
-                    Status = $"GitHub a repondu {((int)response.StatusCode)} pendant le telechargement.",
-                };
+                downloadResult = await DownloadMultipartGameAsync(
+                    manifest,
+                    tempPath,
+                    progress,
+                    cancellationToken
+                );
+            }
+            else
+            {
+                downloadResult = await DownloadSingleFileGameAsync(
+                    manifest,
+                    tempPath,
+                    cancellationToken
+                );
             }
 
-            await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
-            await using (var destination = File.Create(tempPath))
+            if (!downloadResult.Success)
             {
-                await source.CopyToAsync(destination, cancellationToken);
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+
+                var partDirectory = Path.Combine(_installRoot, "download_parts");
+                if (Directory.Exists(partDirectory))
+                {
+                    Directory.Delete(partDirectory, true);
+                }
+
+                return downloadResult;
             }
 
             var downloadedInfo = new FileInfo(tempPath);
@@ -513,6 +566,12 @@ internal sealed class LauncherService
                 File.Delete(tempPath);
             }
 
+            var partDirectory = Path.Combine(_installRoot, "download_parts");
+            if (Directory.Exists(partDirectory))
+            {
+                Directory.Delete(partDirectory, true);
+            }
+
             return new EnsureInstallResult
             {
                 Success = false,
@@ -522,9 +581,152 @@ internal sealed class LauncherService
         }
     }
 
+    private static EnsureInstallResult BuildDownloadHttpErrorResult(int statusCode, int? partIndex = null, int? totalParts = null)
+    {
+        var status = partIndex is null || totalParts is null
+            ? $"GitHub a repondu {statusCode} pendant le telechargement."
+            : $"GitHub a repondu {statusCode} pendant le telechargement de la partie {partIndex}/{totalParts}.";
+
+        return new EnsureInstallResult
+        {
+            Success = false,
+            ErrorCode = "LAUNCH-INSTALL-002",
+            Status = status,
+        };
+    }
+
+    private static EnsureInstallResult BuildDownloadInvalidResult(string message, string errorCode = "LAUNCH-INSTALL-003")
+    {
+        return new EnsureInstallResult
+        {
+            Success = false,
+            ErrorCode = errorCode,
+            Status = message,
+        };
+    }
+
+    private void EnsureInstallDirectory()
+    {
+        Directory.CreateDirectory(_installRoot);
+    }
+
+    private async Task<EnsureInstallResult> DownloadSingleFileGameAsync(
+        LauncherManifest manifest,
+        string destinationPath,
+        CancellationToken cancellationToken
+    )
+    {
+        using var response = await HttpClient.GetAsync(
+            manifest.GameDownloadUrl,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken
+        );
+        if (!response.IsSuccessStatusCode)
+        {
+            return BuildDownloadHttpErrorResult((int)response.StatusCode);
+        }
+
+        await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
+        await using (var destination = File.Create(destinationPath))
+        {
+            await source.CopyToAsync(destination, cancellationToken);
+        }
+
+        return new EnsureInstallResult { Success = true };
+    }
+
+    private async Task<EnsureInstallResult> DownloadMultipartGameAsync(
+        LauncherManifest manifest,
+        string destinationPath,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken
+    )
+    {
+        var partDirectory = Path.Combine(_installRoot, "download_parts");
+        Directory.CreateDirectory(partDirectory);
+
+        if (File.Exists(destinationPath))
+        {
+            File.Delete(destinationPath);
+        }
+
+        await using var destination = File.Create(destinationPath);
+        for (var index = 0; index < manifest.GameParts.Count; index++)
+        {
+            var part = manifest.GameParts[index];
+            if (string.IsNullOrWhiteSpace(part.Url))
+            {
+                return BuildDownloadInvalidResult(
+                    $"Le manifest GitHub ne reference pas correctement la partie {index + 1}.",
+                    "LAUNCH-INSTALL-008"
+                );
+            }
+
+            progress?.Report($"Telechargement du jeu ({index + 1}/{manifest.GameParts.Count})...");
+            using var response = await HttpClient.GetAsync(
+                part.Url,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken
+            );
+            if (!response.IsSuccessStatusCode)
+            {
+                return BuildDownloadHttpErrorResult((int)response.StatusCode, index + 1, manifest.GameParts.Count);
+            }
+
+            var partPath = Path.Combine(partDirectory, $"game.part{index + 1:D2}.download");
+            if (File.Exists(partPath))
+            {
+                File.Delete(partPath);
+            }
+
+            await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await using (var partDestination = File.Create(partPath))
+            {
+                await source.CopyToAsync(partDestination, cancellationToken);
+            }
+
+            var partInfo = new FileInfo(partPath);
+            if (!partInfo.Exists || (part.SizeBytes > 0 && partInfo.Length != part.SizeBytes))
+            {
+                File.Delete(partPath);
+                return BuildDownloadInvalidResult(
+                    $"La partie {index + 1}/{manifest.GameParts.Count} est incomplete ou invalide."
+                );
+            }
+
+            if (!string.IsNullOrWhiteSpace(part.Sha256))
+            {
+                var partHash = await ComputeSha256Async(partPath, cancellationToken);
+                if (!string.Equals(partHash, part.Sha256.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Delete(partPath);
+                    return BuildDownloadInvalidResult(
+                        $"La partie {index + 1}/{manifest.GameParts.Count} ne correspond pas au hash attendu.",
+                        "LAUNCH-INSTALL-009"
+                    );
+                }
+            }
+
+            await using (var partSource = File.OpenRead(partPath))
+            {
+                await partSource.CopyToAsync(destination, cancellationToken);
+            }
+
+            File.Delete(partPath);
+        }
+
+        if (Directory.Exists(partDirectory))
+        {
+            Directory.Delete(partDirectory, true);
+        }
+
+        return new EnsureInstallResult { Success = true };
+    }
+
     private EnsureInstallResult TryInstallFromBundle(IProgress<string>? progress, bool repairMode)
     {
-        if (!HasBundledGame)
+        var bundledGamePath = TryResolveBundledGamePath();
+        if (bundledGamePath is null)
         {
             return new EnsureInstallResult
             {
@@ -538,7 +740,7 @@ internal sealed class LauncherService
         {
             progress?.Report(repairMode ? "Reparation depuis le bundle local..." : "Installation depuis le bundle local...");
             Directory.CreateDirectory(_installRoot);
-            File.Copy(_bundledGamePath, InstalledGamePath, true);
+            File.Copy(bundledGamePath, InstalledGamePath, true);
 
             var version = NormalizeVersion(Application.ProductVersion ?? "1.2.0");
             var hash = ComputeSha256(InstalledGamePath);

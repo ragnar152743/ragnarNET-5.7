@@ -4,3 +4,4 @@
 *.jpeg filter=lfs diff=lfs merge=lfs -text
 *.glb filter=lfs diff=lfs merge=lfs -text
 *.gltf filter=lfs diff=lfs merge=lfs -text
+distribution/*.exe filter=lfs diff=lfs merge=lfs -text
