@@ -11,4 +11,5 @@ internal sealed class EnsureInstallResult
     public bool InstalledFromGitHub { get; init; }
     public bool UpdatedFromGitHub { get; init; }
     public bool RepairedInstall { get; init; }
+    public string LauncherStatus { get; init; } = "";
 }

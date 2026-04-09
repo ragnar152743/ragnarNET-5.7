@@ -6,6 +6,7 @@ const DEFAULT_SETTINGS := {
 	"graphics_preset": "auto",
 	"auto_fallback": true,
 	"github_repo": "",
+	"player_name": "",
 }
 const GRAPHICS_PRESET_ORDER := ["auto", "8k", "4k", "2k", "1080p", "low"]
 
@@ -27,6 +28,7 @@ func load_settings() -> Dictionary:
 	_settings["graphics_preset"] = normalize_graphics_preset(String(_settings.get("graphics_preset", "auto")))
 	_settings["auto_fallback"] = bool(_settings.get("auto_fallback", true))
 	_settings["github_repo"] = normalize_repo_slug(String(_settings.get("github_repo", "")))
+	_settings["player_name"] = normalize_player_name(String(_settings.get("player_name", "")))
 	return _settings.duplicate(true)
 
 
@@ -42,6 +44,7 @@ func save_settings(next_settings: Dictionary) -> void:
 	_settings["graphics_preset"] = normalize_graphics_preset(String(_settings.get("graphics_preset", "auto")))
 	_settings["auto_fallback"] = bool(_settings.get("auto_fallback", true))
 	_settings["github_repo"] = normalize_repo_slug(String(_settings.get("github_repo", "")))
+	_settings["player_name"] = normalize_player_name(String(_settings.get("player_name", "")))
 
 	var file := FileAccess.open(SETTINGS_PATH, FileAccess.WRITE)
 	if file == null:
@@ -93,6 +96,19 @@ func normalize_repo_slug(repo_slug: String) -> String:
 		normalized = normalized.trim_prefix("/")
 	while normalized.ends_with("/"):
 		normalized = normalized.left(normalized.length() - 1)
+	return normalized
+
+
+func normalize_player_name(player_name: String) -> String:
+	var normalized := player_name.strip_edges()
+	if normalized.is_empty():
+		normalized = OS.get_environment("USERNAME").strip_edges()
+	if normalized.is_empty():
+		normalized = OS.get_environment("COMPUTERNAME").strip_edges()
+	if normalized.is_empty():
+		normalized = "Player"
+	if normalized.length() > 24:
+		normalized = normalized.substr(0, 24)
 	return normalized
 
 

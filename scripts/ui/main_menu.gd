@@ -4,6 +4,7 @@ class_name MainMenuLayer
 signal slot_new_requested(slot_id: int)
 signal slot_load_requested(slot_id: int)
 signal slot_delete_requested(slot_id: int)
+signal lan_join_requested(session: Dictionary)
 signal quit_requested()
 signal graphics_settings_changed(settings: Dictionary)
 
@@ -19,6 +20,8 @@ var graphics_status: Label
 var app_name_label: Label
 var app_version_label: Label
 var system_profile_label: Label
+var lan_status_label: Label
+var lan_session_list: VBoxContainer
 
 var busy := false
 
@@ -127,6 +130,73 @@ func set_system_profile(profile: Dictionary) -> void:
 		budget_gb,
 		texture_tier,
 	]
+
+
+func set_lan_sessions(session_entries: Array[Dictionary]) -> void:
+	if lan_session_list == null or lan_status_label == null:
+		return
+
+	for child in lan_session_list.get_children():
+		lan_session_list.remove_child(child)
+		child.queue_free()
+
+	if session_entries.is_empty():
+		lan_status_label.text = "Aucun monde LAN detecte pour le moment."
+		return
+
+	lan_status_label.text = "%s monde(s) LAN detecte(s)." % session_entries.size()
+	for entry in session_entries:
+		var panel := PanelContainer.new()
+		panel.add_theme_stylebox_override("panel", _card_style())
+		lan_session_list.add_child(panel)
+
+		var margin := MarginContainer.new()
+		margin.add_theme_constant_override("margin_left", 12)
+		margin.add_theme_constant_override("margin_right", 12)
+		margin.add_theme_constant_override("margin_top", 10)
+		margin.add_theme_constant_override("margin_bottom", 10)
+		panel.add_child(margin)
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		margin.add_child(row)
+
+		var text_stack := VBoxContainer.new()
+		text_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		text_stack.add_theme_constant_override("separation", 4)
+		row.add_child(text_stack)
+
+		var title := Label.new()
+		title.text = String(entry.get("world_name", "LAN World"))
+		title.add_theme_color_override("font_color", Color(0.95, 0.98, 1.0))
+		text_stack.add_child(title)
+
+		var subtitle := Label.new()
+		subtitle.text = "%s  |  %s:%s" % [
+			String(entry.get("host_name", "Unknown Host")),
+			String(entry.get("address", "0.0.0.0")),
+			int(entry.get("port", 0)),
+		]
+		subtitle.add_theme_color_override("font_color", Color(0.62, 0.8, 0.96))
+		text_stack.add_child(subtitle)
+
+		var details := Label.new()
+		details.text = "Seed %s  |  %s/%s joueurs  |  %s" % [
+			int(entry.get("seed", 0)),
+			int(entry.get("player_count", 1)),
+			int(entry.get("max_players", 4)),
+			String(entry.get("biome", "mixed")).capitalize(),
+		]
+		details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		details.add_theme_color_override("font_color", Color(0.72, 0.82, 0.9))
+		text_stack.add_child(details)
+
+		var join_button := Button.new()
+		join_button.text = "Join"
+		join_button.custom_minimum_size = Vector2(86.0, 34.0)
+		join_button.disabled = busy
+		join_button.pressed.connect(_on_join_lan_pressed.bind(entry.duplicate(true)))
+		row.add_child(join_button)
 
 
 func show_menu() -> void:
@@ -334,6 +404,37 @@ func _build_ui() -> void:
 	launcher_note.add_theme_color_override("font_color", Color(0.62, 0.74, 0.84))
 	system_stack.add_child(launcher_note)
 
+	var lan_panel: PanelContainer = PanelContainer.new()
+	lan_panel.add_theme_stylebox_override("panel", _card_style())
+	sidebar.add_child(lan_panel)
+
+	var lan_margin: MarginContainer = MarginContainer.new()
+	lan_margin.add_theme_constant_override("margin_left", 22)
+	lan_margin.add_theme_constant_override("margin_right", 22)
+	lan_margin.add_theme_constant_override("margin_top", 20)
+	lan_margin.add_theme_constant_override("margin_bottom", 20)
+	lan_panel.add_child(lan_margin)
+
+	var lan_stack: VBoxContainer = VBoxContainer.new()
+	lan_stack.add_theme_constant_override("separation", 10)
+	lan_margin.add_child(lan_stack)
+
+	lan_stack.add_child(_section_title("LAN Worlds"))
+
+	lan_status_label = Label.new()
+	lan_status_label.text = "Recherche des mondes reseau..."
+	lan_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lan_status_label.add_theme_color_override("font_color", Color(0.72, 0.82, 0.92))
+	lan_stack.add_child(lan_status_label)
+
+	var lan_scroll := ScrollContainer.new()
+	lan_scroll.custom_minimum_size = Vector2(0.0, 220.0)
+	lan_stack.add_child(lan_scroll)
+
+	lan_session_list = VBoxContainer.new()
+	lan_session_list.add_theme_constant_override("separation", 10)
+	lan_scroll.add_child(lan_session_list)
+
 	var quit_button: Button = Button.new()
 	quit_button.text = "Quitter"
 	quit_button.custom_minimum_size = Vector2(0.0, 40.0)
@@ -464,6 +565,10 @@ func _on_delete_pressed(slot_id: int) -> void:
 
 func _on_quit_pressed() -> void:
 	quit_requested.emit()
+
+
+func _on_join_lan_pressed(session: Dictionary) -> void:
+	lan_join_requested.emit(session)
 
 
 func _on_graphics_option_selected(_index: int) -> void:

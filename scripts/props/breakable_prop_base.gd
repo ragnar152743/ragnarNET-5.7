@@ -26,6 +26,7 @@ func _ready() -> void:
 	if _built:
 		return
 	_built = true
+	add_to_group("breakable_props")
 
 	visual_root = Node3D.new()
 	visual_root.name = "VisualRoot"

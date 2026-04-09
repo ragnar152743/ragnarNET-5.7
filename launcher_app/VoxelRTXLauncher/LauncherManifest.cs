@@ -22,6 +22,9 @@ internal sealed class LauncherManifest
     [JsonPropertyName("game_sha256")]
     public string GameSha256 { get; set; } = "";
 
+    [JsonPropertyName("minimum_game_size_bytes")]
+    public long MinimumGameSizeBytes { get; set; }
+
     [JsonPropertyName("notes")]
     public string Notes { get; set; } = "";
 }

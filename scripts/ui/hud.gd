@@ -3,6 +3,7 @@ class_name HUDLayer
 
 signal mod_toggle_requested(mod_id)
 signal world_regenerate_requested()
+signal chat_submitted(message: String)
 signal overlay_mode_changed(interactive)
 
 var slot_panels: Array[PanelContainer] = []
@@ -16,6 +17,11 @@ var help_label: Label
 var mod_panel: PanelContainer
 var mod_list: VBoxContainer
 var mods_visible := false
+var chat_panel: PanelContainer
+var chat_log: RichTextLabel
+var chat_input: LineEdit
+var network_label: Label
+var chat_open := false
 
 
 func _ready() -> void:
@@ -26,6 +32,32 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("toggle_mod_menu") or (event is InputEventKey and event.pressed and event.keycode == KEY_M):
 		_toggle_mod_panel()
 		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_T or event.keycode == KEY_ENTER:
+			_set_chat_open(true)
+			get_viewport().set_input_as_handled()
+
+
+func append_chat_message(sender_name: String, message: String) -> void:
+	if chat_log == null:
+		return
+	chat_log.append_text("[color=#8bd8ff]%s[/color] %s\n" % [sender_name, message])
+	var lines := chat_log.get_parsed_text().split("\n", false)
+	if lines.size() > 12:
+		chat_log.clear()
+		for line_index in range(max(0, lines.size() - 12), lines.size()):
+			chat_log.append_text("%s\n" % lines[line_index])
+
+
+func clear_chat_messages() -> void:
+	if chat_log != null:
+		chat_log.clear()
+
+
+func set_network_status(label_text: String) -> void:
+	if network_label != null:
+		network_label.text = label_text
 
 
 func set_inventory(slot_view: Array[Dictionary]) -> void:
@@ -216,9 +248,53 @@ func _build_ui() -> void:
 	help_label.offset_right = 560.0
 	help_label.offset_top = -126.0
 	help_label.offset_bottom = -24.0
-	help_label.text = "ZQSD / WASD move  |  Shift sprint  |  Space jump  |  Hold left click break  |  Right click place  |  Wheel / 1-8 select  |  M mods  |  R new world"
+	help_label.text = "ZQSD / WASD move  |  Shift sprint  |  Space jump  |  Hold left click break  |  Right click place  |  Wheel / 1-8 select  |  T / Enter chat  |  M mods  |  R new world"
 	help_label.add_theme_color_override("font_color", Color(0.72, 0.82, 0.92))
 	root.add_child(help_label)
+
+	chat_panel = PanelContainer.new()
+	chat_panel.anchor_left = 0.0
+	chat_panel.anchor_right = 0.0
+	chat_panel.anchor_top = 1.0
+	chat_panel.anchor_bottom = 1.0
+	chat_panel.offset_left = 24.0
+	chat_panel.offset_right = 388.0
+	chat_panel.offset_top = -336.0
+	chat_panel.offset_bottom = -138.0
+	chat_panel.visible = true
+	chat_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	chat_panel.add_theme_stylebox_override("panel", _slot_style())
+	root.add_child(chat_panel)
+
+	var chat_margin := MarginContainer.new()
+	chat_margin.add_theme_constant_override("margin_left", 12)
+	chat_margin.add_theme_constant_override("margin_right", 12)
+	chat_margin.add_theme_constant_override("margin_top", 12)
+	chat_margin.add_theme_constant_override("margin_bottom", 12)
+	chat_panel.add_child(chat_margin)
+
+	var chat_stack := VBoxContainer.new()
+	chat_stack.add_theme_constant_override("separation", 8)
+	chat_margin.add_child(chat_stack)
+
+	network_label = Label.new()
+	network_label.text = "Offline"
+	network_label.add_theme_color_override("font_color", Color(0.74, 0.88, 0.98))
+	chat_stack.add_child(network_label)
+
+	chat_log = RichTextLabel.new()
+	chat_log.bbcode_enabled = true
+	chat_log.fit_content = true
+	chat_log.scroll_active = true
+	chat_log.custom_minimum_size = Vector2(0.0, 110.0)
+	chat_log.add_theme_color_override("default_color", Color(0.9, 0.95, 1.0))
+	chat_stack.add_child(chat_log)
+
+	chat_input = LineEdit.new()
+	chat_input.placeholder_text = "Parler en LAN..."
+	chat_input.visible = false
+	chat_input.text_submitted.connect(_on_chat_submitted)
+	chat_stack.add_child(chat_input)
 
 	mod_panel = PanelContainer.new()
 	mod_panel.visible = false
@@ -275,6 +351,11 @@ func _build_ui() -> void:
 	mod_stack.mouse_filter = Control.MOUSE_FILTER_STOP
 	list_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
 	mod_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	chat_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	chat_margin.mouse_filter = Control.MOUSE_FILTER_STOP
+	chat_stack.mouse_filter = Control.MOUSE_FILTER_STOP
+	chat_log.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chat_input.mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func _slot_style() -> StyleBoxFlat:
@@ -313,7 +394,7 @@ func _set_mouse_passthrough(control: Control) -> void:
 func _toggle_mod_panel() -> void:
 	mods_visible = not mods_visible
 	mod_panel.visible = mods_visible
-	overlay_mode_changed.emit(mods_visible)
+	_emit_overlay_state()
 
 
 func _on_mod_toggle_pressed(mod_id: String) -> void:
@@ -322,3 +403,30 @@ func _on_mod_toggle_pressed(mod_id: String) -> void:
 
 func _on_regenerate_pressed() -> void:
 	world_regenerate_requested.emit()
+
+
+func _on_chat_submitted(text: String) -> void:
+	var trimmed := text.strip_edges()
+	if trimmed.is_empty():
+		_set_chat_open(false)
+		return
+	chat_submitted.emit(trimmed)
+	chat_input.clear()
+	_set_chat_open(false)
+
+
+func _set_chat_open(enabled: bool) -> void:
+	if chat_input == null:
+		return
+	chat_open = enabled
+	chat_input.visible = enabled
+	if enabled:
+		chat_input.grab_focus()
+	else:
+		chat_input.release_focus()
+		chat_input.clear()
+	_emit_overlay_state()
+
+
+func _emit_overlay_state() -> void:
+	overlay_mode_changed.emit(mods_visible or chat_open)

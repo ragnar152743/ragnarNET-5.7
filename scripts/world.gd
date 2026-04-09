@@ -1,6 +1,9 @@
 extends Node3D
 class_name VoxelWorld
 
+signal block_state_changed(cell: Vector3i, block_id: int)
+signal prop_state_changed(prop_key: String)
+
 const VoxelChunkScript = preload("res://scripts/voxel_chunk.gd")
 const DayNightCycleScript = preload("res://scripts/day_night_cycle.gd")
 
@@ -117,6 +120,14 @@ var peaks_noise: FastNoiseLite
 var erosion_noise: FastNoiseLite
 var moisture_noise: FastNoiseLite
 var temperature_noise: FastNoiseLite
+var river_noise: FastNoiseLite
+var plateau_noise: FastNoiseLite
+var cliff_noise: FastNoiseLite
+var basin_noise: FastNoiseLite
+var ridge_noise: FastNoiseLite
+var detail_noise: FastNoiseLite
+var cave_noise: FastNoiseLite
+var cavern_noise: FastNoiseLite
 var tree_noise: FastNoiseLite
 var rock_noise: FastNoiseLite
 var grass_noise: FastNoiseLite
@@ -238,8 +249,22 @@ func get_spawn_position() -> Vector3:
 	return spawn_position
 
 
+func get_seed() -> int:
+	return world_seed
+
+
 func get_kill_plane_y() -> float:
 	return KILL_PLANE_Y
+
+
+func get_world_summary() -> Dictionary:
+	var spawn_column := _get_column_data(spawn_cell)
+	return {
+		"seed": world_seed,
+		"spawn_biome": String(spawn_column.get("biome", "temperate")),
+		"spawn_height": int(spawn_column.get("height", water_level)),
+		"water_level": water_level,
+	}
 
 
 func get_save_state() -> Dictionary:
@@ -311,6 +336,7 @@ func get_block(cell: Vector3i) -> int:
 
 	var column := _get_column_data(Vector2i(cell.x, cell.z))
 	var surface_height := int(column.get("height", water_level))
+	var biome_key := String(column.get("biome", "temperate"))
 	if cell.y > surface_height:
 		return BlockLibrary.AIR
 
@@ -319,16 +345,28 @@ func get_block(cell: Vector3i) -> int:
 		surface_height,
 		int(column.get("steepness", 0)),
 		float(column.get("moisture", 0.5)),
-		float(column.get("temperature", 0.5))
+		float(column.get("temperature", 0.5)),
+		biome_key,
+		float(column.get("river", 0.0))
 	)
-	return _decorate_generated_block(
+	var decorated_block := _decorate_generated_block(
 		cell,
 		base_block,
 		surface_height,
 		int(column.get("steepness", 0)),
 		float(column.get("moisture", 0.5)),
-		float(column.get("temperature", 0.5))
+		float(column.get("temperature", 0.5)),
+		biome_key,
+		float(column.get("river", 0.0))
 	)
+	if _should_carve_cave(
+		cell,
+		surface_height,
+		biome_key,
+		float(column.get("river", 0.0))
+	):
+		return BlockLibrary.AIR
+	return decorated_block
 
 
 func break_block(cell: Vector3i) -> Dictionary:
@@ -339,9 +377,7 @@ func break_block(cell: Vector3i) -> Dictionary:
 	if block_id == BlockLibrary.AIR:
 		return {}
 
-	modified_blocks[cell] = BlockLibrary.AIR
-	_queue_rebuild_for_cell(cell)
-	spawn_block_break_effect(cell, block_id)
+	set_block_state(cell, BlockLibrary.AIR, true)
 
 	return {
 		"block_id": BlockLibrary.get_drop_block_id(block_id),
@@ -359,9 +395,17 @@ func place_block(cell: Vector3i, block_id: int, player_position: Vector3) -> boo
 	if _would_intersect_player(cell, player_position):
 		return false
 
+	set_block_state(cell, block_id)
+	return true
+
+
+func set_block_state(cell: Vector3i, block_id: int, play_break_effect: bool = false) -> void:
+	var previous_block := get_block(cell)
 	modified_blocks[cell] = block_id
 	_queue_rebuild_for_cell(cell)
-	return true
+	if play_break_effect and previous_block != BlockLibrary.AIR and block_id == BlockLibrary.AIR:
+		spawn_block_break_effect(cell, previous_block)
+	block_state_changed.emit(cell, block_id)
 
 
 func pick_target(origin: Vector3, end: Vector3) -> Dictionary:
@@ -410,7 +454,25 @@ func cell_to_world(cell: Vector3i) -> Vector3:
 
 
 func mark_prop_removed(prop_key: String) -> void:
+	if removed_props.has(prop_key):
+		return
 	removed_props[prop_key] = true
+	_queue_prop_refresh_for_prop_key(prop_key)
+	prop_state_changed.emit(prop_key)
+
+
+func apply_damage_to_prop(prop_key: String) -> Dictionary:
+	for node_variant in get_tree().get_nodes_in_group("breakable_props"):
+		if not (node_variant is Node3D):
+			continue
+		var prop_node := node_variant as Node3D
+		if not is_ancestor_of(prop_node):
+			continue
+		if String(prop_node.get("prop_key")) != prop_key:
+			continue
+		if prop_node.has_method("apply_damage"):
+			return prop_node.call("apply_damage")
+	return {}
 
 
 func _build_structure() -> void:
@@ -551,6 +613,38 @@ func _initialize_noise() -> void:
 	temperature_noise = FastNoiseLite.new()
 	temperature_noise.seed = world_seed + 211
 	temperature_noise.frequency = 0.01
+
+	river_noise = FastNoiseLite.new()
+	river_noise.seed = world_seed + 227
+	river_noise.frequency = 0.0048
+
+	plateau_noise = FastNoiseLite.new()
+	plateau_noise.seed = world_seed + 241
+	plateau_noise.frequency = 0.0085
+
+	cliff_noise = FastNoiseLite.new()
+	cliff_noise.seed = world_seed + 257
+	cliff_noise.frequency = 0.019
+
+	basin_noise = FastNoiseLite.new()
+	basin_noise.seed = world_seed + 263
+	basin_noise.frequency = 0.0105
+
+	ridge_noise = FastNoiseLite.new()
+	ridge_noise.seed = world_seed + 271
+	ridge_noise.frequency = 0.0115
+
+	detail_noise = FastNoiseLite.new()
+	detail_noise.seed = world_seed + 279
+	detail_noise.frequency = 0.082
+
+	cave_noise = FastNoiseLite.new()
+	cave_noise.seed = world_seed + 281
+	cave_noise.frequency = 0.048
+
+	cavern_noise = FastNoiseLite.new()
+	cavern_noise.seed = world_seed + 287
+	cavern_noise.frequency = 0.03
 
 	tree_noise = FastNoiseLite.new()
 	tree_noise.seed = world_seed + 251
@@ -745,6 +839,9 @@ func _build_prop_chunk(chunk_key: Vector2i) -> void:
 			var moisture := float(column.get("moisture", 0.5))
 			var temperature := float(column.get("temperature", 0.5))
 			var steepness := int(column.get("steepness", 0))
+			var biome_key := String(column.get("biome", "temperate"))
+			var river_strength := float(column.get("river", 0.0))
+			var coast_strength := float(column.get("coast", 0.0))
 			var top_block := get_block(Vector3i(x, height, z))
 			var top_key := String(BlockLibrary.get_block_definition(top_block).get("key", ""))
 			var is_flat_surface := _is_flat_enough(x, z, 1)
@@ -755,6 +852,49 @@ func _build_prop_chunk(chunk_key: Vector2i) -> void:
 			var grass_chance := _noise_01(grass_noise.get_noise_2d(float(x), float(z)))
 			var flora_chance := _noise_01(grass_noise.get_noise_2d(float(x) + 41.0, float(z) - 37.0))
 			var stash_hash := _hash_01_3d(x, height, z, 147)
+			var tree_threshold := 0.78
+			var grass_threshold := 0.64
+			var shrub_threshold := 0.83
+			var rock_threshold := 0.74
+
+			match biome_key:
+				"forest":
+					tree_threshold = 0.64
+					grass_threshold = 0.52
+					shrub_threshold = 0.7
+				"meadow":
+					tree_threshold = 0.8
+					grass_threshold = 0.46
+					shrub_threshold = 0.64
+				"marsh":
+					tree_threshold = 0.72
+					grass_threshold = 0.54
+					shrub_threshold = 0.68
+				"coast":
+					tree_threshold = 0.91
+					grass_threshold = 0.58
+					shrub_threshold = 0.67
+					rock_threshold = 0.63
+				"badlands":
+					tree_threshold = 0.985
+					grass_threshold = 0.9
+					shrub_threshold = 0.92
+					rock_threshold = 0.52
+				"highland":
+					tree_threshold = 0.86
+					grass_threshold = 0.68
+					shrub_threshold = 0.79
+					rock_threshold = 0.56
+				"canyon":
+					tree_threshold = 0.96
+					rock_threshold = 0.58
+				"alpine":
+					tree_threshold = 0.95
+					rock_threshold = 0.5
+				"tundra":
+					tree_threshold = 0.97
+					grass_threshold = 0.78
+					rock_threshold = 0.6
 
 			if _is_spawn_zone(x, z):
 				continue
@@ -762,7 +902,7 @@ func _build_prop_chunk(chunk_key: Vector2i) -> void:
 				continue
 
 			if is_green_surface and is_flat_surface:
-				if moisture > 0.46 and temperature > 0.2 and tree_chance > (0.78 / max(tree_density, 0.1)):
+				if moisture > 0.46 and temperature > 0.16 and tree_chance > (tree_threshold / max(tree_density, 0.1)) and river_strength < 0.94:
 					_try_spawn_tree(prop_holder, x, z, height)
 					continue
 
@@ -774,7 +914,7 @@ func _build_prop_chunk(chunk_key: Vector2i) -> void:
 					_try_spawn_wooden_crate(prop_holder, x, z, height)
 					continue
 
-				if moisture > 0.54 and temperature > 0.28 and flora_chance > (0.83 / max(shrub_density, 0.1)):
+				if moisture > 0.54 and temperature > 0.12 and flora_chance > (shrub_threshold / max(shrub_density, 0.1)):
 					_try_spawn_shrub(prop_holder, x, z, height)
 					continue
 
@@ -782,8 +922,16 @@ func _build_prop_chunk(chunk_key: Vector2i) -> void:
 					_try_spawn_tree_stump(prop_holder, x, z, height)
 					continue
 
-				if moisture > 0.38 and grass_chance > (0.64 / max(grass_density, 0.1)):
+				if moisture > 0.3 and grass_chance > (grass_threshold / max(grass_density, 0.1)):
 					_try_spawn_grass(prop_holder, x, z, height)
+
+			if biome_key == "coast" and is_sandy_surface and is_flat_surface:
+				if moisture > 0.44 and flora_chance > (shrub_threshold / max(shrub_density, 0.1)) and coast_strength > 0.42:
+					_try_spawn_shrub(prop_holder, x, z, height)
+					continue
+				if grass_chance > 0.81 and moisture > 0.36:
+					_try_spawn_grass(prop_holder, x, z, height)
+					continue
 
 			var rock_chance := _noise_01(rock_noise.get_noise_2d(float(x), float(z)))
 			if is_sandy_surface and is_flat_surface and stash_hash > (0.986 / max(loot_density, 0.1)):
@@ -794,7 +942,7 @@ func _build_prop_chunk(chunk_key: Vector2i) -> void:
 				_try_spawn_tool_chest(prop_holder, x, z, height)
 				continue
 
-			if (steepness >= 2 or top_block == BlockLibrary.STONE) and rock_chance > (0.74 / max(rock_density, 0.1)):
+			if (steepness >= 2 or top_block == BlockLibrary.STONE or biome_key in ["canyon", "alpine"]) and rock_chance > (rock_threshold / max(rock_density, 0.1)):
 				_try_spawn_rock(prop_holder, x, z, height)
 
 
@@ -912,38 +1060,76 @@ func _get_column_data(cell: Vector2i) -> Dictionary:
 	var steepness := _estimate_steepness(cell.x, cell.y, height)
 	var moisture := _noise_01(moisture_noise.get_noise_2d(float(cell.x), float(cell.y)))
 	var temperature := _noise_01(temperature_noise.get_noise_2d(float(cell.x) + 97.0, float(cell.y) - 83.0))
+	var warped_surface := _get_warped_surface_position(cell.x, cell.y)
+	var continental := _noise_01(continental_noise.get_noise_2d(warped_surface.x, warped_surface.y))
+	var river_strength := _sample_river_strength(cell.x, cell.y)
+	var plateau_strength := _noise_01(plateau_noise.get_noise_2d(warped_surface.x * 0.82, warped_surface.y * 0.82))
+	var coast_strength := _sample_coast_strength(height, continental, river_strength)
+	var ruggedness := float(steepness) + absf(ridge_noise.get_noise_2d(warped_surface.x * 0.86, warped_surface.y * 0.86)) * 3.6
+	var biome_key := _resolve_biome_key(height, moisture, temperature, river_strength, plateau_strength, coast_strength, ruggedness)
 
 	var column := {
 		"height": height,
 		"steepness": steepness,
 		"moisture": moisture,
 		"temperature": temperature,
+		"continental": continental,
+		"river": river_strength,
+		"plateau": plateau_strength,
+		"coast": coast_strength,
+		"ruggedness": ruggedness,
+		"biome": biome_key,
 	}
 	column_cache[cell] = column
 	_prune_column_cache_if_needed()
 	return column
 
 
-func _sample_height_value(x: int, z: int) -> int:
+func _get_warped_surface_position(x: int, z: int) -> Vector2:
 	var fx := float(x)
 	var fz := float(z)
-	var warped_x := fx + warp_x_noise.get_noise_2d(fx, fz) * 12.0
-	var warped_z := fz + warp_z_noise.get_noise_2d(fx, fz) * 12.0
+	return Vector2(
+		fx + warp_x_noise.get_noise_2d(fx, fz) * 12.0,
+		fz + warp_z_noise.get_noise_2d(fx, fz) * 12.0
+	)
+
+
+func _sample_height_value(x: int, z: int) -> int:
+	var warped_surface := _get_warped_surface_position(x, z)
+	var warped_x := warped_surface.x
+	var warped_z := warped_surface.y
 
 	var continental := _noise_01(continental_noise.get_noise_2d(warped_x, warped_z))
 	var hills := _noise_01(hills_noise.get_noise_2d(warped_x * 1.1, warped_z * 1.1))
 	var peaks := pow(absf(peaks_noise.get_noise_2d(warped_x * 0.86, warped_z * 0.86)), 1.42)
 	var erosion := _noise_01(erosion_noise.get_noise_2d(warped_x * 1.24, warped_z * 1.24))
+	var plateau := _noise_01(plateau_noise.get_noise_2d(warped_x * 0.78, warped_z * 0.78))
+	var cliff := absf(cliff_noise.get_noise_2d(warped_x * 0.95, warped_z * 0.95))
+	var basin := _noise_01(basin_noise.get_noise_2d(warped_x * 0.6, warped_z * 0.6))
+	var ridge_mask := absf(ridge_noise.get_noise_2d(warped_x * 0.72, warped_z * 0.72))
+	var detail := detail_noise.get_noise_2d(warped_x * 1.3, warped_z * 1.3)
+	var river_strength := _sample_river_strength(x, z)
 
 	var terrain_height_bonus := float(world_settings.get("terrain_height_bonus", 0.0))
 	var ridge_strength := float(world_settings.get("terrain_ridge_strength", 1.0))
 
-	var broad_land := lerpf(8.0, 20.0, pow(continental, 1.18))
-	var rolling_hills := (hills - 0.5) * lerpf(3.0, 8.5, continental)
-	var ridge_height := peaks * lerpf(2.5, 15.5, continental) * ridge_strength
-	var erosion_drop := erosion * lerpf(1.5, 5.0, continental)
+	var inland_factor := smoothstep(0.24, 0.88, continental)
+	var coast_band := clampf(1.0 - absf(continental - 0.42) / 0.24, 0.0, 1.0)
+	var ridge_band := pow(max(0.0, 1.0 - absf(ridge_mask - 0.58) * 2.2), 2.1)
+	var broad_land := lerpf(6.0, 23.0, pow(inland_factor, 1.05))
+	var rolling_hills := (hills - 0.5) * lerpf(2.0, 10.0, inland_factor)
+	var ridge_height := peaks * ridge_band * lerpf(0.0, 18.0, inland_factor) * ridge_strength
+	var erosion_drop := erosion * lerpf(1.0, 5.8, inland_factor)
+	var basin_drop := smoothstep(0.56, 0.92, basin) * lerpf(0.0, 7.4, inland_factor)
+	var plateau_lift := smoothstep(0.62, 0.9, plateau) * lerpf(0.0, 8.4, inland_factor)
+	var cliff_lift := pow(cliff, 1.85) * lerpf(0.0, 6.4, inland_factor)
+	var detail_lift := detail * lerpf(0.4, 2.4, inland_factor)
+	var river_carve := smoothstep(0.68, 0.985, river_strength) * lerpf(1.4, 8.0, inland_factor)
 
-	var height_value := broad_land + rolling_hills + ridge_height - erosion_drop + terrain_height_bonus
+	var height_value := broad_land + rolling_hills + ridge_height + plateau_lift + cliff_lift + detail_lift - erosion_drop - basin_drop - river_carve + terrain_height_bonus
+	if coast_band > 0.18:
+		var shore_target := float(water_level) + lerpf(1.0, 4.0, clampf(continental * 1.28, 0.0, 1.0))
+		height_value = lerpf(height_value, shore_target, coast_band * 0.42)
 	return int(clamp(round(height_value), 4.0, float(max_height - 4)))
 
 
@@ -962,21 +1148,41 @@ func _sample_neighbor_height(x: int, z: int) -> int:
 	return _sample_height_value(x, z)
 
 
-func _pick_block_for_height(y: int, surface_height: int, steepness: int, moisture: float, temperature: float) -> int:
+func _pick_block_for_height(y: int, surface_height: int, steepness: int, moisture: float, temperature: float, biome_key: String, river_strength: float) -> int:
 	if y == surface_height:
+		if river_strength > 0.9:
+			return BlockLibrary.SAND if biome_key != "tundra" else BlockLibrary.SNOW
 		if surface_height <= water_level + 1:
+			return BlockLibrary.SAND
+		if biome_key == "coast":
+			return BlockLibrary.SAND
+		if biome_key == "badlands":
 			return BlockLibrary.SAND
 		if steepness >= 4 or (surface_height >= water_level + 14 and steepness >= 2):
 			return BlockLibrary.STONE
+		if biome_key == "alpine":
+			return BlockLibrary.STONE
+		if biome_key == "highland" and (steepness >= 2 or surface_height >= water_level + 15):
+			return BlockLibrary.STONE
+		if biome_key == "tundra":
+			return BlockLibrary.SNOW
+		if biome_key == "marsh":
+			return BlockLibrary.MUD
 		if temperature > 0.68 and moisture < 0.34:
 			return BlockLibrary.SAND
 		return BlockLibrary.GRASS
 
 	if y >= surface_height - 2:
-		if surface_height <= water_level + 1:
+		if river_strength > 0.9 or surface_height <= water_level + 1:
+			return BlockLibrary.SAND
+		if biome_key == "coast" or biome_key == "badlands":
 			return BlockLibrary.SAND
 		if steepness >= 5:
 			return BlockLibrary.STONE
+		if biome_key == "highland" and steepness >= 3:
+			return BlockLibrary.STONE
+		if biome_key == "marsh":
+			return BlockLibrary.MUD
 		return BlockLibrary.DIRT
 
 	return BlockLibrary.STONE
@@ -988,7 +1194,9 @@ func _decorate_generated_block(
 	surface_height: int,
 	steepness: int,
 	moisture: float,
-	temperature: float
+	temperature: float,
+	biome_key: String,
+	river_strength: float
 ) -> int:
 	if base_block == BlockLibrary.AIR:
 		return BlockLibrary.AIR
@@ -999,6 +1207,14 @@ func _decorate_generated_block(
 	var relic_hash := _hash_01_3d(cell.x, cell.y, cell.z, 53)
 
 	if cell.y == surface_height:
+		if river_strength > 0.9 and surface_height > water_level + 1:
+			if biome_key == "tundra":
+				return _pick_block_from_keys(["snow", "glacier_tile", "frost_slate"], surface_hash, BlockLibrary.SNOW)
+			if biome_key == "badlands":
+				return _pick_block_from_keys(["red_sand", "dune_clay", "canyon_stone", "scarlet_sandstone"], surface_hash, BlockLibrary.RED_SAND)
+			if biome_key == "coast":
+				return _pick_block_from_keys(["sand", "sandstone", "reef_stone", "clay"], surface_hash, BlockLibrary.SAND)
+			return _pick_block_from_keys(["sand", "sandstone", "clay"], surface_hash, BlockLibrary.SAND)
 		if temperature < 0.24 and surface_height > water_level + 4:
 			return _pick_block_from_keys(["snow", "ice", "aurora_ice", "frost_marble", "frost_slate", "glacier_tile"], surface_hash, BlockLibrary.SNOW)
 
@@ -1006,6 +1222,10 @@ func _decorate_generated_block(
 			return _pick_block_from_keys(["mud", "clay", "dune_clay", "reef_stone"], surface_hash, BlockLibrary.MUD)
 
 		if base_block == BlockLibrary.SAND:
+			if biome_key == "coast":
+				return _pick_block_from_keys(["sand", "sandstone", "reef_stone", "clay", "carved_sandstone"], surface_hash, BlockLibrary.SAND)
+			if biome_key == "badlands":
+				return _pick_block_from_keys(["red_sand", "sandstone", "dune_clay", "canyon_stone", "scarlet_sandstone", "carved_sandstone"], surface_hash, BlockLibrary.RED_SAND)
 			if temperature > 0.82 and surface_hash > 0.94:
 				return _pick_block_from_keys(["glass", "prism_glass", "obsidian_glass"], surface_hash, BlockLibrary.GLASS)
 			if temperature > 0.72:
@@ -1015,6 +1235,8 @@ func _decorate_generated_block(
 			return _pick_block_from_keys(["sand", "sandstone", "carved_sandstone"], surface_hash, BlockLibrary.SANDSTONE if steepness >= 2 else BlockLibrary.SAND)
 
 		if base_block == BlockLibrary.STONE:
+			if biome_key == "highland":
+				return _pick_block_from_keys(["slate", "granite", "moon_granite", "limestone_brick", "travertine_tile"], surface_hash, BlockLibrary.SLATE)
 			if moisture > 0.66:
 				return _pick_block_from_keys(["mossy_stone", "moss_tile", "reef_stone", "lichen_rock_block"], surface_hash, BlockLibrary.MOSSY_STONE)
 			if surface_height > water_level + 20:
@@ -1024,6 +1246,22 @@ func _decorate_generated_block(
 			return _pick_block_from_keys(["slate", "granite", "shale", "moon_granite"], surface_hash, BlockLibrary.SLATE)
 
 		if base_block == BlockLibrary.GRASS:
+			if biome_key == "forest":
+				return _pick_block_from_keys(["grass", "moss_tile", "mossy_stone"], surface_hash, BlockLibrary.GRASS)
+			if biome_key == "meadow":
+				return _pick_block_from_keys(["grass", "travertine_tile", "moss_tile"], surface_hash, BlockLibrary.GRASS)
+			if biome_key == "highland":
+				return _pick_block_from_keys(["grass", "stone", "slate", "granite", "limestone_brick"], surface_hash, BlockLibrary.GRASS)
+			if biome_key == "marsh":
+				return _pick_block_from_keys(["mud", "clay", "reef_stone", "moss_tile"], surface_hash, BlockLibrary.MUD)
+			if biome_key == "coast":
+				return _pick_block_from_keys(["sand", "grass", "reef_stone", "clay"], surface_hash, BlockLibrary.SAND)
+			if biome_key == "badlands":
+				return _pick_block_from_keys(["red_sand", "dune_clay", "canyon_stone"], surface_hash, BlockLibrary.RED_SAND)
+			if biome_key == "canyon":
+				return _pick_block_from_keys(["red_sand", "dune_clay", "canyon_stone"], surface_hash, BlockLibrary.RED_SAND)
+			if biome_key == "alpine":
+				return _pick_block_from_keys(["stone", "slate", "granite", "moon_granite"], surface_hash, BlockLibrary.STONE)
 			if surface_height > water_level + 22 and temperature < 0.34:
 				return _pick_block_from_keys(["snow", "ice", "frost_slate", "frost_marble", "glacier_tile"], surface_hash, BlockLibrary.SNOW)
 			if moisture > 0.84:
@@ -1033,15 +1271,27 @@ func _decorate_generated_block(
 
 	if surface_depth >= 1 and surface_depth <= 3:
 		if base_block == BlockLibrary.DIRT:
+			if biome_key == "coast":
+				return _pick_block_from_keys(["sand", "clay", "reef_stone", "sandstone"], strata_hash, BlockLibrary.CLAY)
+			if biome_key == "badlands":
+				return _pick_block_from_keys(["sandstone", "red_sand", "carved_sandstone", "canyon_stone"], strata_hash, BlockLibrary.SANDSTONE)
+			if biome_key == "highland":
+				return _pick_block_from_keys(["dirt", "stone", "slate", "limestone_brick"], strata_hash, BlockLibrary.DIRT)
 			if moisture > 0.72:
 				return _pick_block_from_keys(["clay", "mud", "dune_clay", "reef_stone"], strata_hash, BlockLibrary.CLAY)
 			if temperature > 0.68 and moisture < 0.34:
 				return _pick_block_from_keys(["sandstone", "red_sand", "carved_sandstone", "canyon_stone"], strata_hash, BlockLibrary.SANDSTONE)
 
 		if base_block == BlockLibrary.SAND:
+			if biome_key == "coast":
+				return _pick_block_from_keys(["sand", "sandstone", "reef_stone", "carved_sandstone"], strata_hash, BlockLibrary.SANDSTONE)
+			if biome_key == "badlands":
+				return _pick_block_from_keys(["red_sand", "sandstone", "canyon_stone", "scarlet_sandstone"], strata_hash, BlockLibrary.SANDSTONE)
 			return _pick_block_from_keys(["sand", "sandstone", "carved_sandstone", "scarlet_sandstone"], strata_hash, BlockLibrary.SANDSTONE)
 
 		if base_block == BlockLibrary.STONE:
+			if biome_key == "highland":
+				return _pick_block_from_keys(["slate", "granite", "moon_granite", "limestone_brick", "rock_tile"], strata_hash, BlockLibrary.SLATE)
 			if surface_height > water_level + 20 and temperature < 0.36 and strata_hash > 0.44:
 				return _pick_block_from_keys(["marble", "frost_marble", "moon_granite"], strata_hash, BlockLibrary.MARBLE)
 			if moisture > 0.66 and strata_hash > 0.52:
@@ -1108,12 +1358,98 @@ func _prepare_spawn_zone() -> void:
 	spawn_position = _resolve_safe_spawn_position(spawn_cell, spawn_height)
 
 
+func _sample_river_strength(x: int, z: int) -> float:
+	var river_value := absf(river_noise.get_noise_2d(float(x) * 0.92, float(z) * 0.92))
+	return clampf(1.0 - min(river_value * 3.4, 1.0), 0.0, 1.0)
+
+
+func _sample_coast_strength(height: int, continental: float, river_strength: float) -> float:
+	var height_distance := absf(float(height - water_level - 2))
+	var shore_band := 1.0 - smoothstep(2.0, 10.0, height_distance)
+	var continental_band := clampf(1.0 - absf(continental - 0.43) / 0.25, 0.0, 1.0)
+	return clampf(shore_band * continental_band * (1.0 - river_strength * 0.35), 0.0, 1.0)
+
+
+func _resolve_biome_key(
+	height: int,
+	moisture: float,
+	temperature: float,
+	river_strength: float,
+	plateau_strength: float,
+	coast_strength: float,
+	ruggedness: float
+) -> String:
+	if river_strength > 0.92 and height > water_level + 1 and ruggedness < 4.6:
+		return "riverbank"
+	if coast_strength > 0.55:
+		if moisture > 0.76 and temperature < 0.68:
+			return "marsh"
+		if temperature > 0.72 and moisture < 0.4:
+			return "badlands"
+		return "coast"
+	if temperature < 0.24:
+		return "tundra"
+	if height > water_level + 18 and (plateau_strength > 0.68 or ruggedness > 4.6):
+		return "alpine"
+	if height > water_level + 12 and ruggedness > 3.1 and moisture > 0.46 and temperature < 0.6:
+		return "highland"
+	if temperature > 0.79 and moisture < 0.28:
+		return "badlands"
+	if temperature > 0.74 and moisture < 0.35:
+		return "canyon"
+	if moisture > 0.78:
+		return "marsh"
+	if moisture > 0.58 and temperature > 0.34:
+		return "forest"
+	if moisture > 0.44:
+		return "meadow"
+	return "temperate"
+
+
+func _should_carve_cave(cell: Vector3i, surface_height: int, biome_key: String, river_strength: float) -> bool:
+	if cell.y >= surface_height - 4 or cell.y <= 2:
+		return false
+	if _is_spawn_zone(cell.x, cell.z):
+		return false
+	var cave_value := absf(cave_noise.get_noise_3d(float(cell.x) * 0.82, float(cell.y) * 1.1, float(cell.z) * 0.82))
+	var cavern_value := _noise_01(cavern_noise.get_noise_3d(float(cell.x) * 0.36, float(cell.y) * 0.58, float(cell.z) * 0.36))
+	var depth_factor := clampf(float(surface_height - cell.y) / 30.0, 0.0, 1.0)
+	var threshold := 0.115 + depth_factor * 0.12
+	if biome_key == "marsh":
+		threshold *= 0.82
+	if biome_key == "highland":
+		threshold *= 0.94
+	if river_strength > 0.88:
+		threshold *= 1.18
+	if depth_factor > 0.24 and cavern_value > 0.82:
+		return true
+	return cave_value < threshold
+
+
+func _queue_prop_refresh_for_prop_key(prop_key: String) -> void:
+	var chunk_key := _prop_key_to_chunk(prop_key)
+	if chunk_key == Vector2i(2147483647, 2147483647):
+		return
+	_clear_prop_chunk(chunk_key)
+	if chunks.has(chunk_key):
+		_queue_prop_chunk_build(chunk_key)
+
+
+func _prop_key_to_chunk(prop_key: String) -> Vector2i:
+	var parts := prop_key.split(":")
+	if parts.size() < 3:
+		return Vector2i(2147483647, 2147483647)
+	var cell_x := int(parts[1])
+	var cell_z := int(parts[2])
+	return Vector2i(int(floor(cell_x / float(CHUNK_SIZE))), int(floor(cell_z / float(CHUNK_SIZE))))
+
+
 func _find_spawn_cell() -> Vector2i:
 	var best_cell := Vector2i.ZERO
 	var best_score := -1000000.0
 
-	for x in range(-28, 29):
-		for z in range(-28, 29):
+	for x in range(-40, 41):
+		for z in range(-40, 41):
 			var cell := Vector2i(x, z)
 			var column := _get_column_data(cell)
 			var height := int(column.get("height", water_level))
@@ -1131,8 +1467,31 @@ func _find_spawn_cell() -> Vector2i:
 
 			var moisture := float(column.get("moisture", 0.5))
 			var temperature := float(column.get("temperature", 0.5))
+			var river_strength := float(column.get("river", 0.0))
+			var coast_strength := float(column.get("coast", 0.0))
+			var biome_key := String(column.get("biome", "temperate"))
 			var distance_to_origin := Vector2(x, z).length()
-			var score := 42.0 - distance_to_origin * 0.65 + moisture * 6.0 + (1.0 - absf(temperature - 0.5)) * 4.0 + float(height) * 0.38
+			var biome_bonus := 0.0
+			match biome_key:
+				"meadow":
+					biome_bonus = 9.0
+				"forest":
+					biome_bonus = 7.0
+				"temperate":
+					biome_bonus = 5.5
+				"riverbank":
+					biome_bonus = 4.0
+				"highland":
+					biome_bonus = 2.0
+				"coast":
+					biome_bonus = 1.5
+				"canyon", "badlands":
+					biome_bonus = -4.5
+				"alpine", "tundra":
+					biome_bonus = -5.0
+				"marsh":
+					biome_bonus = -7.0
+			var score := 42.0 - distance_to_origin * 0.58 + moisture * 6.0 + (1.0 - absf(temperature - 0.5)) * 4.4 + float(height) * 0.34 + biome_bonus - coast_strength * 3.8 - absf(river_strength - 0.52) * 2.4
 			if score > best_score:
 				best_score = score
 				best_cell = cell
@@ -1182,8 +1541,9 @@ func _is_spawn_volume_clear(local_feet: Vector3, radius: float, height: float) -
 func _set_column_height(x: int, z: int, target_height: int) -> void:
 	var column_key := Vector2i(x, z)
 	column_cache.erase(column_key)
-	var moisture := float(_get_column_data(column_key).get("moisture", 0.5))
-	var temperature := float(_get_column_data(column_key).get("temperature", 0.5))
+	var column := _get_column_data(column_key)
+	var moisture := float(column.get("moisture", 0.5))
+	var temperature := float(column.get("temperature", 0.5))
 	for y in range(0, max_height):
 		var cell := Vector3i(x, y, z)
 		if y <= target_height:
@@ -1192,9 +1552,20 @@ func _set_column_height(x: int, z: int, target_height: int) -> void:
 				target_height,
 				0,
 				moisture,
-				temperature
+				temperature,
+				String(column.get("biome", "temperate")),
+				float(column.get("river", 0.0))
 			)
-			modified_blocks[cell] = _decorate_generated_block(cell, base_block, target_height, 0, moisture, temperature)
+			modified_blocks[cell] = _decorate_generated_block(
+				cell,
+				base_block,
+				target_height,
+				0,
+				moisture,
+				temperature,
+				String(column.get("biome", "temperate")),
+				float(column.get("river", 0.0))
+			)
 		else:
 			modified_blocks[cell] = BlockLibrary.AIR
 

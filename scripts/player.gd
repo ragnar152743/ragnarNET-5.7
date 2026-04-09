@@ -4,6 +4,9 @@ class_name PlayerController
 signal inventory_changed(slot_view)
 signal selected_block_changed(slot_index, block_name)
 signal target_block_changed(label_text)
+signal block_break_requested(cell: Vector3i)
+signal block_place_requested(cell: Vector3i, block_id: int, player_position: Vector3)
+signal prop_break_requested(prop_key: String)
 
 const WALK_SPEED := 6.8
 const SPRINT_SPEED := 10.4
@@ -157,6 +160,15 @@ func get_selected_display_name() -> String:
 	if block_id == BlockLibrary.AIR:
 		return "Empty"
 	return BlockLibrary.get_display_name(block_id)
+
+
+func get_network_state() -> Dictionary:
+	return {
+		"position": global_position,
+		"yaw": rotation.y,
+		"pitch": pitch,
+		"is_sprinting": is_sprinting,
+	}
 
 
 func get_save_state() -> Dictionary:
@@ -488,12 +500,14 @@ func _handle_block_interactions(delta: float) -> void:
 		var block_id := _get_selected_block_id()
 		if block_id == BlockLibrary.AIR:
 			return
-		if world.place_block(hit["place_cell"], block_id, global_position):
-			if _consume_selected_block(1):
-				_play_sound_if_ready(place_player)
+		if block_place_requested.get_connections().size() > 0:
+			block_place_requested.emit(hit["place_cell"], block_id, global_position)
+		elif world.place_block(hit["place_cell"], block_id, global_position):
+			consume_block_from_inventory(block_id, 1)
+			play_place_feedback()
 
 
-func _apply_loot(result: Dictionary) -> void:
+func apply_loot_result(result: Dictionary) -> void:
 	if result.is_empty():
 		return
 
@@ -505,6 +519,14 @@ func _apply_loot(result: Dictionary) -> void:
 		for drop in result.get("drops", []):
 			if drop is Dictionary:
 				add_block_to_inventory(int(drop.get("block_id", BlockLibrary.AIR)), int(drop.get("count", 0)))
+
+
+func play_place_feedback() -> void:
+	_play_sound_if_ready(place_player)
+
+
+func play_break_feedback() -> void:
+	_play_sound_if_ready(break_player)
 
 
 func add_block_to_inventory(block_id: int, count: int) -> int:
@@ -554,6 +576,26 @@ func _consume_selected_block(amount: int) -> bool:
 
 	_emit_inventory_state()
 	return true
+
+
+func consume_block_from_inventory(block_id: int, amount: int) -> bool:
+	if block_id == BlockLibrary.AIR or amount <= 0:
+		return false
+	if _get_selected_block_id() == block_id and _consume_selected_block(amount):
+		return true
+
+	for slot_index in range(inventory_slots.size()):
+		if int(inventory_slots[slot_index].get("block_id", BlockLibrary.AIR)) != block_id:
+			continue
+		var count := int(inventory_slots[slot_index].get("count", 0))
+		if count < amount:
+			continue
+		inventory_slots[slot_index]["count"] = count - amount
+		if int(inventory_slots[slot_index].get("count", 0)) <= 0:
+			inventory_slots[slot_index] = _make_empty_slot()
+		_emit_inventory_state()
+		return true
+	return false
 
 
 func _update_targeted_block() -> void:
@@ -765,14 +807,23 @@ func _complete_break(hit: Dictionary) -> void:
 	var hit_kind := String(hit.get("kind", ""))
 	if hit_kind == "prop":
 		var prop = hit.get("prop", null)
+		var prop_key := ""
+		if prop != null:
+			prop_key = String(prop.get("prop_key"))
+		if not prop_key.is_empty() and prop_break_requested.get_connections().size() > 0:
+			prop_break_requested.emit(prop_key)
+			return
 		if prop != null and prop.has_method("apply_damage"):
 			var result: Dictionary = prop.call("apply_damage")
-			_apply_loot(result)
-			_play_sound_if_ready(break_player)
+			apply_loot_result(result)
+			play_break_feedback()
 		return
 
 	if hit_kind == "block":
+		if block_break_requested.get_connections().size() > 0:
+			block_break_requested.emit(hit["cell"])
+			return
 		var break_result := world.break_block(hit["cell"])
 		if not break_result.is_empty():
-			_apply_loot(break_result)
-			_play_sound_if_ready(break_player)
+			apply_loot_result(break_result)
+			play_break_feedback()

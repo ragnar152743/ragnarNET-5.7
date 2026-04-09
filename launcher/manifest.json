@@ -4,6 +4,7 @@
   "version": "1.2.5",
   "game_download_url": "https://github.com/ragnar152743/ragnarNET-5.7/releases/latest/download/VoxelRTXGame.exe",
   "launcher_download_url": "https://github.com/ragnar152743/ragnarNET-5.7/releases/latest/download/VoxelRTXLauncher.exe",
-  "game_sha256": "",
-  "notes": "Manifest officiel du launcher Voxel RTX."
+  "game_sha256": "c0535e3b8825d80772fde8b9e7d8e5060aa421b42d1dbd91ea3d1d25135b0a70",
+  "minimum_game_size_bytes": 104857600,
+  "notes": "Manifest officiel du jeu Voxel RTX. Monde ameliore, LAN et launcher renforce."
 }
